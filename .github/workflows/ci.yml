@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Pull requests run only the jobs whose area changed; pushes to main run everything.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ github.event_name == 'push' || steps.filter.outputs.backend == 'true' }}
+      ai-worker: ${{ github.event_name == 'push' || steps.filter.outputs.ai-worker == 'true' }}
+      frontend: ${{ github.event_name == 'push' || steps.filter.outputs.frontend == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@v4
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            backend:
+              - backend/core-service/**
+              - .github/workflows/ci.yml
+            ai-worker:
+              - ai/inference/**
+              - .github/workflows/ci.yml
+            frontend:
+              - frontend/**
+              - .github/workflows/ci.yml
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/core-service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Build and test (unit, ArchUnit, Testcontainers integration)
+        run: ./gradlew build --no-daemon
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: backend-test-reports
+          path: |
+            backend/core-service/build/reports/tests
+            backend/core-service/build/reports/jacoco
+
+  ai-worker:
+    needs: changes
+    if: needs.changes.outputs.ai-worker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build test image
+        uses: docker/build-push-action@v7
+        with:
+          context: ai/inference
+          target: test
+          tags: medimg-ai-worker:test
+          load: true
+          cache-from: type=gha,scope=ai-worker
+          cache-to: type=gha,scope=ai-worker,mode=max
+      - name: Lint and fast tests
+        if: github.event_name == 'pull_request'
+        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && python -m pytest -q -m 'not slow'"
+      - name: Lint and all tests, including the real model
+        if: github.event_name == 'push'
+        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && python -m pytest -q"
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build

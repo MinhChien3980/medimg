@@ -1,0 +1,101 @@
+# Local stack.
+#   docker compose -f deploy/docker-compose.yml up -d                     → infra + ai-worker (core-service and frontend run on the host)
+#   docker compose -f deploy/docker-compose.yml --profile full up --build → everything, UI on http://localhost:8088
+name: medimg
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: medimg
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      MEDIMG_OWNER_PASSWORD: ${MEDIMG_OWNER_PASSWORD:-medimg_owner}
+      MEDIMG_APP_PASSWORD: ${MEDIMG_APP_PASSWORD:-medimg_app}
+    command: ["postgres", "-c", "shared_buffers=384MB"]
+    ports: ["${PG_PORT:-5432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d medimg"]
+      interval: 5s
+      retries: 20
+    deploy: { resources: { limits: { memory: 1536m } } }
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "200mb", "--maxmemory-policy", "noeviction"]
+    ports: ["${REDIS_PORT:-6379}:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+    deploy: { resources: { limits: { memory: 256m } } }
+
+  # S3-compatible object storage (replaces MinIO, whose community edition is no longer published).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.54
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-volume.max=0"]
+    ports: ["${S3_PORT:-8333}:8333"]
+    volumes:
+      - s3data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    deploy: { resources: { limits: { memory: 512m } } }
+
+  ai-worker:
+    build: ../ai/inference
+    image: medimg-ai-worker:dev
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_ACCESS_KEY: medimg
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-medimg-dev-secret}
+      WORKER_KIND: cpu
+    depends_on:
+      redis: { condition: service_healthy }
+      seaweedfs: { condition: service_started }
+    restart: unless-stopped
+    deploy: { resources: { limits: { memory: 4g, cpus: "2.0" } } }
+
+  core-service:
+    profiles: ["full"]
+    build: ../backend/core-service
+    image: medimg-core-service:dev
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/medimg
+      REDIS_HOST: redis
+      S3_ENDPOINT: http://seaweedfs:8333
+      # Presigned URLs are signed for the host the browser uses: the web container below.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:${WEB_PORT:-8088}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-medimg-dev-secret}
+      JAVA_TOOL_OPTIONS: -Xmx1536m
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      seaweedfs: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+    deploy: { resources: { limits: { memory: 2g } } }
+
+  # React SPA served by Nginx, which also proxies /api/ to core-service and /medimg/ to SeaweedFS.
+  web:
+    profiles: ["full"]
+    build: ../frontend
+    image: medimg-web:dev
+    ports: ["${WEB_PORT:-8088}:8080"]
+    depends_on:
+      core-service: { condition: service_healthy }
+      seaweedfs: { condition: service_started }
+    deploy: { resources: { limits: { memory: 128m } } }
+
+volumes:
+  pgdata:
+  redisdata:
+  s3data:
