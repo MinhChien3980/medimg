@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# OS / editors / IDEs
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.fleet/
+.project
+.classpath
+.settings/
+.factorypath
+.apt_generated/
+.sts4-cache/
+.springBeans
+nbproject/private/
+
+# ---------------------------------------------------------------------------
+# Secrets and local environment
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.local
+
+# ---------------------------------------------------------------------------
+# Logs / temp
+# ---------------------------------------------------------------------------
+logs/
+*.log
+*.tmp
+
+# ---------------------------------------------------------------------------
+# Backend (Gradle / Java)
+# ---------------------------------------------------------------------------
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+bin/
+out/
+HELP.md
+hs_err_pid*
+
+# ---------------------------------------------------------------------------
+# AI (Python / models / data)
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+weights/
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+mlruns/
+wandb/
+
+# ---------------------------------------------------------------------------
+# Frontend (Node / Vite)
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.vite/
+npm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Medical data – never commit patient or study files
+# ---------------------------------------------------------------------------
+data/
+*.dcm
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
