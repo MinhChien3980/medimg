@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http as mock, HttpResponse, delay } from 'msw';
+import { http as mock, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type {
   CreateFindingRequest,
@@ -24,6 +24,7 @@ import {
 import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
 import type { SelectedAnnotation } from './ManualFindings';
+import { findModal } from '@/test/modal';
 
 const SERIES_ID = study.series[0]?.id ?? '';
 
@@ -56,6 +57,15 @@ function renderPanel(selectedAnnotation: SelectedAnnotation | null = null) {
 
 const status = (id: string) => screen.getByTestId(`review-status-${id}`);
 
+/** Holds a mocked response until the test has seen the optimistic state, whatever the CPU load. */
+function gate() {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { opened, open };
+}
+
 describe('finding review', () => {
   beforeEach(() => {
     useAuthStore.getState().setSession(tokens('acc', 'ref', doctor));
@@ -65,9 +75,10 @@ describe('finding review', () => {
     const user = userEvent.setup();
     serve();
     let sent: ReviewFindingRequest | null = null;
+    const response = gate();
     server.use(
       mock.patch(`${API}/findings/f1/review`, async ({ request }) => {
-        await delay(300);
+        await response.opened;
         sent = (await request.json()) as ReviewFindingRequest;
         return HttpResponse.json(
           aiFinding({
@@ -100,6 +111,7 @@ describe('finding review', () => {
       'aria-pressed',
       'true',
     );
+    response.open();
     await waitFor(() => expect(sent).toEqual({ status: 'ACCEPTED', version: 0 }));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Accept Cardiomegaly' })).toBeEnabled(),
@@ -110,9 +122,10 @@ describe('finding review', () => {
   it('rolls back and reloads when someone else reviewed the finding meanwhile (409)', async () => {
     const user = userEvent.setup();
     const calls = serve();
+    const response = gate();
     server.use(
       mock.patch(`${API}/findings/f1/review`, async () => {
-        await delay(300);
+        await response.opened;
         return HttpResponse.json(
           { status: 409, title: 'Conflict', detail: 'Version mismatch' },
           { status: 409 },
@@ -125,6 +138,7 @@ describe('finding review', () => {
 
     await user.click(screen.getByRole('button', { name: 'Reject Cardiomegaly' }));
     await waitFor(() => expect(status('f1')).toHaveTextContent('Rejected'));
+    response.open();
 
     expect(
       await screen.findByText(
@@ -164,7 +178,7 @@ describe('finding review', () => {
     await screen.findByText('0 of 3 reviewed');
 
     await user.click(screen.getByRole('button', { name: 'Edit Effusion' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Review “Effusion”' });
+    const dialog = await findModal('Review “Effusion”');
     const label = within(dialog).getByLabelText('Corrected label');
     await user.clear(label);
     await user.click(within(dialog).getByRole('button', { name: 'Save review' }));
@@ -269,7 +283,7 @@ describe('manual findings', () => {
     renderPanel({ id: 'ann-1', name: 'Rectangle 1' });
 
     await user.click(await screen.findByRole('button', { name: /Add finding/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add a finding' });
+    const dialog = await findModal('Add a finding');
     await user.type(within(dialog).getByLabelText('Label'), '  Rib fracture ');
     expect(
       within(dialog).getByRole('checkbox', {
