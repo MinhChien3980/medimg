@@ -2,14 +2,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { putToPresignedUrl, uploadsApi } from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import { isTerminalUpload, type UploadDto, type Uuid } from '@/api/types';
-import { resolveContentType } from './fileValidation';
+import { isTerminalUpload, type InputType, type UploadDto, type Uuid } from '@/api/types';
+import { classifyFile, type UploadKind } from './fileValidation';
 
-/** Poll interval for `GET /uploads/{id}` while the server processes the image. */
+/** Poll interval for `GET /uploads/{id}` while the server processes the file. */
 export const UPLOAD_POLL_MS = 1000;
 
-/** Give up polling after this long (the server marks stuck uploads FAILED after 10 min). */
-export const UPLOAD_PROCESSING_TIMEOUT_MS = 2 * 60_000;
+/**
+ * Give up polling after this long. The server marks stuck uploads FAILED after 10 min (2D) or
+ * 30 min (volume); a CT volume is normally ready within a few minutes on CPU.
+ */
+export const UPLOAD_PROCESSING_TIMEOUT_MS: Record<UploadKind, number> = {
+  image: 2 * 60_000,
+  volume: 10 * 60_000,
+};
 
 export type UploadPhase =
   'idle' | 'initializing' | 'uploading' | 'completing' | 'processing' | 'done' | 'failed';
@@ -30,12 +36,19 @@ export interface StartUploadInput {
 
 interface LocalState {
   phase: Exclude<UploadPhase, 'done'>;
+  kind: UploadKind;
   uploadId: Uuid | null;
   percent: number;
   failure: UploadFailure | null;
 }
 
-const INITIAL: LocalState = { phase: 'idle', uploadId: null, percent: 0, failure: null };
+const INITIAL: LocalState = {
+  phase: 'idle',
+  kind: 'image',
+  uploadId: null,
+  percent: 0,
+  failure: null,
+};
 
 class InvalidUploadResponseError extends Error {}
 
@@ -75,6 +88,7 @@ export function useUploadFlow() {
   }
 
   const studyId = phase === 'done' ? (upload?.studyId ?? null) : null;
+  const inputType: InputType | null = upload?.inputType ?? null;
 
   // A finished upload changes the case's study list / count.
   useEffect(() => {
@@ -91,19 +105,21 @@ export function useUploadFlow() {
       setState((s) =>
         s.phase === 'processing' ? { ...s, phase: 'failed', failure: { kind: 'timeout' } } : s,
       );
-    }, UPLOAD_PROCESSING_TIMEOUT_MS);
+    }, UPLOAD_PROCESSING_TIMEOUT_MS[state.kind]);
     return () => clearTimeout(timer);
-  }, [stillProcessing, state.uploadId]);
+  }, [stillProcessing, state.uploadId, state.kind]);
 
   const start = useCallback(
     async ({ patientId, file, modalityHint, bodyPartHint }: StartUploadInput) => {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
-      const contentType = resolveContentType(file) ?? 'application/octet-stream';
+      const spec = classifyFile(file);
+      const kind = spec?.kind ?? 'image';
+      const contentType = spec?.contentType ?? 'application/octet-stream';
 
       try {
-        setState({ ...INITIAL, phase: 'initializing' });
+        setState({ ...INITIAL, kind, phase: 'initializing' });
         const init = await uploadsApi.init({
           patientId,
           files: [{ name: file.name, size: file.size, contentType }],
@@ -113,7 +129,7 @@ export function useUploadFlow() {
         const target = init.files[0];
         if (!target) throw new InvalidUploadResponseError();
 
-        setState({ ...INITIAL, phase: 'uploading', uploadId: init.uploadId });
+        setState({ ...INITIAL, kind, phase: 'uploading', uploadId: init.uploadId });
         await putToPresignedUrl(
           target.putUrl,
           file,
@@ -145,10 +161,15 @@ export function useUploadFlow() {
 
   return {
     phase,
+    kind: state.kind,
+    /** Upload progress of the PUT, 0..100. */
     percent: state.percent,
+    /** Server-side processing progress, 0..100. */
+    processingPercent: upload?.progress ?? 0,
     uploadId: state.uploadId,
     uploadStatus: upload?.status ?? null,
     studyId,
+    inputType,
     failure,
     start,
     reset,

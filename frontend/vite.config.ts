@@ -33,6 +33,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Browser tests under e2e/ run with Playwright (`npm run e2e`).
+    include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
     css: false,
     testTimeout: 15000,

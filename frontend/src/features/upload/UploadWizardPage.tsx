@@ -1,4 +1,5 @@
 import {
+  BlockOutlined,
   CloudUploadOutlined,
   DeleteOutlined,
   ExperimentOutlined,
@@ -29,15 +30,25 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { patientsApi, studiesApi } from '@/api/endpoints';
 import { errorMessage } from '@/api/problem';
 import { queryKeys } from '@/api/queryKeys';
-import type { PatientDto, Uuid } from '@/api/types';
-import { useImageModels, useRunPrediction } from '@/features/ai/hooks';
-import { DEFAULT_THRESHOLD } from '@/features/ai/findings';
+import type { InputType, PatientDto, Uuid } from '@/api/types';
+import { useModels, useRunPrediction } from '@/features/ai/hooks';
+import { DEFAULT_THRESHOLD, isSegmentationModel } from '@/features/ai/findings';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { CasePicker } from './CasePicker';
-import { ACCEPT_ATTRIBUTE, formatBytes, validateImageFile } from './fileValidation';
+import {
+  ACCEPT_ATTRIBUTE,
+  checkUploadFile,
+  formatBytes,
+  type UploadFileSpec,
+  type UploadKind,
+} from './fileValidation';
 import { useUploadFlow, type UploadFailure, type UploadPhase } from './useUploadFlow';
 
-const MODALITIES = ['CR', 'DX'];
+/** Modality hints per kind of file (the worker reads the real modality from DICOM headers). */
+const MODALITIES: Record<UploadKind, readonly string[]> = {
+  image: ['CR', 'DX'],
+  volume: ['CT', 'MR'],
+};
 const BODY_PARTS = ['CHEST', 'ABDOMEN', 'SKULL', 'EXTREMITY', 'OTHER'];
 
 const PHASE_PERCENT: Record<UploadPhase, number> = {
@@ -45,7 +56,7 @@ const PHASE_PERCENT: Record<UploadPhase, number> = {
   initializing: 5,
   uploading: 0, // real progress
   completing: 100,
-  processing: 100,
+  processing: 0, // real progress
   done: 100,
   failed: 100,
 };
@@ -58,7 +69,7 @@ export default function UploadWizardPage() {
 
   const [step, setStep] = useState(0);
   const [picked, setPicked] = useState<PatientDto | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [file, setFile] = useState<{ file: File; spec: UploadFileSpec } | null>(null);
   const [modality, setModality] = useState('CR');
   const [bodyPart, setBodyPart] = useState('CHEST');
   const flow = useUploadFlow();
@@ -71,12 +82,22 @@ export default function UploadWizardPage() {
   });
   const patient = picked ?? preselected.data ?? null;
 
+  const modalities = MODALITIES[file?.spec.kind ?? 'image'];
+
   const beforeUpload = (candidate: File) => {
-    const problem = validateImageFile(candidate);
-    if (problem === 'type') void message.error(t('upload.invalidType'));
-    else if (problem === 'size') void message.error(t('upload.tooLarge'));
-    else if (problem === 'empty') void message.error(t('upload.empty'));
-    else setFile(candidate);
+    const check = checkUploadFile(candidate);
+    if (check.ok) {
+      setFile({ file: candidate, spec: check.spec });
+      const options = MODALITIES[check.spec.kind];
+      if (!options.includes(modality)) setModality(options[0] ?? modality);
+      if (check.spec.kind === 'volume' && bodyPart === 'CHEST') setBodyPart('ABDOMEN');
+    } else if (check.problem === 'type') {
+      void message.error(t('upload.invalidType'));
+    } else if (check.problem === 'size') {
+      void message.error(t(check.kind === 'volume' ? 'upload.tooLargeVolume' : 'upload.tooLarge'));
+    } else {
+      void message.error(t('upload.empty'));
+    }
     return Upload.LIST_IGNORE; // never let antd upload by itself
   };
 
@@ -85,7 +106,7 @@ export default function UploadWizardPage() {
     setStep(2);
     void flow.start({
       patientId: patient.id,
-      file,
+      file: file.file,
       modalityHint: modality,
       bodyPartHint: bodyPart,
     });
@@ -105,7 +126,7 @@ export default function UploadWizardPage() {
         style={{ marginBottom: 24 }}
         items={[
           { title: t('upload.steps.case'), content: patient?.code },
-          { title: t('upload.steps.file'), content: file?.name },
+          { title: t('upload.steps.file'), content: file?.file.name },
           { title: t('upload.steps.process') },
         ]}
       />
@@ -148,9 +169,12 @@ export default function UploadWizardPage() {
 
             {file && (
               <div className="picked-file" data-testid="picked-file">
-                <FileImageOutlined />
-                <span className="picked-file__name">{file.name}</span>
-                <Tag>{formatBytes(file.size)}</Tag>
+                {file.spec.kind === 'volume' ? <BlockOutlined /> : <FileImageOutlined />}
+                <span className="picked-file__name">{file.file.name}</span>
+                <Tag color={file.spec.kind === 'volume' ? 'geekblue' : undefined}>
+                  {t(`upload.kinds.${file.spec.kind}`)}
+                </Tag>
+                <Tag>{formatBytes(file.file.size)}</Tag>
                 <Button
                   size="small"
                   type="text"
@@ -167,7 +191,7 @@ export default function UploadWizardPage() {
                   aria-label={t('upload.modality')}
                   value={modality}
                   onChange={setModality}
-                  options={MODALITIES.map((m) => ({ value: m, label: m }))}
+                  options={modalities.map((m) => ({ value: m, label: m }))}
                   style={{ width: 100 }}
                 />
               </Form.Item>
@@ -224,7 +248,7 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
     return (
       <Result
         status="success"
-        title={t('upload.phases.done')}
+        title={t(flow.kind === 'volume' ? 'upload.phases.doneVolume' : 'upload.phases.done')}
         subTitle={t('upload.doneSubtitle')}
         extra={
           <Space orientation="vertical" align="center" size="middle">
@@ -236,7 +260,7 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
               >
                 {t('upload.openViewer')}
               </Button>
-              <RunAiButton studyId={flow.studyId} />
+              <RunAiButton studyId={flow.studyId} inputType={flow.inputType} />
             </Space>
             <Space>
               <Button type="link" onClick={onRestart}>
@@ -268,13 +292,24 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
           </Button>,
         ]}
       >
-        {flow.failure && <FailureAlert failure={flow.failure} />}
+        {flow.failure && <FailureAlert failure={flow.failure} kind={flow.kind} />}
       </Result>
     );
   }
 
-  const percent = flow.phase === 'uploading' ? flow.percent : PHASE_PERCENT[flow.phase];
-  const phaseKey = flow.phase === 'idle' ? 'initializing' : flow.phase;
+  const processing = flow.phase === 'processing';
+  const percent =
+    flow.phase === 'uploading'
+      ? flow.percent
+      : processing
+        ? Math.round(flow.processingPercent)
+        : PHASE_PERCENT[flow.phase];
+  const phaseKey =
+    flow.phase === 'idle'
+      ? 'initializing'
+      : processing && flow.kind === 'volume'
+        ? 'processingVolume'
+        : flow.phase;
 
   return (
     <div className="process-step" data-testid="process-step">
@@ -284,15 +319,15 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
       </Typography.Paragraph>
       <Progress
         percent={percent}
-        status={flow.phase === 'processing' ? 'active' : 'normal'}
-        aria-label={t('upload.progressLabel')}
+        status={processing ? 'active' : 'normal'}
+        aria-label={t(processing ? 'upload.processingLabel' : 'upload.progressLabel')}
       />
       {flow.uploadStatus && <Tag>{t(`upload.status.${flow.uploadStatus}`)}</Tag>}
     </div>
   );
 }
 
-function FailureAlert({ failure }: { failure: UploadFailure }) {
+function FailureAlert({ failure, kind }: { failure: UploadFailure; kind: UploadKind }) {
   const { t } = useTranslation();
   switch (failure.kind) {
     case 'request':
@@ -307,22 +342,29 @@ function FailureAlert({ failure }: { failure: UploadFailure }) {
         />
       );
     case 'timeout':
-      return <Alert type="error" showIcon title={t('upload.errors.timeout')} />;
+      return (
+        <Alert
+          type="error"
+          showIcon
+          title={t(kind === 'volume' ? 'upload.errors.timeoutVolume' : 'upload.errors.timeout')}
+        />
+      );
     case 'invalidResponse':
       return <Alert type="error" showIcon title={t('upload.errors.invalidResponse')} />;
   }
 }
 
 /** Starts an AI run on the first series of the new study, then opens the viewer on it. */
-function RunAiButton({ studyId }: { studyId: Uuid }) {
+function RunAiButton({ studyId, inputType }: { studyId: Uuid; inputType: InputType | null }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const models = useImageModels();
+  const models = useModels(inputType ?? 'IMAGE_2D');
   const run = useRunPrediction();
   const [modelCode, setModelCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const effectiveModel = modelCode ?? models.data?.[0]?.code ?? null;
+  const selected = models.data?.find((m) => m.code === effectiveModel);
 
   const onRun = async () => {
     if (!effectiveModel) return;
@@ -335,7 +377,7 @@ function RunAiButton({ studyId }: { studyId: Uuid }) {
         studyId,
         seriesId,
         modelCode: effectiveModel,
-        threshold: DEFAULT_THRESHOLD,
+        params: isSegmentationModel(selected) ? {} : { threshold: DEFAULT_THRESHOLD },
       });
       await navigate(`/studies/${studyId}?job=${res.jobId}`);
     } catch (e) {

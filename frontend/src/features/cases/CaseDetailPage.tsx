@@ -8,12 +8,12 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { patientsApi, studiesApi } from '@/api/endpoints';
 import { toAppError } from '@/api/problem';
 import { queryKeys } from '@/api/queryKeys';
-import type { PredictionDto, StudyDto } from '@/api/types';
-import { sortFindings } from '@/features/ai/findings';
+import { isVolumeInput, type PredictionDto, type StudyDto } from '@/api/types';
+import { findingValue, isSegmentationResult, sortFindings } from '@/features/ai/findings';
 import { PredictionStatusTag } from '@/features/ai/PredictionStatusTag';
 import { useCan } from '@/features/auth/permissions';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
-import { formatDateTime, formatPercent } from '@/shared/lib/format';
+import { formatDateTime } from '@/shared/lib/format';
 
 export default function CaseDetailPage() {
   const { caseId = '' } = useParams();
@@ -163,6 +163,7 @@ function StudyCard({ study, onThumbError }: { study: StudyDto; onThumbError: () 
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const viewerPath = `/studies/${study.id}`;
+  const dims = study.series[0]?.dims?.join('×');
 
   return (
     <Card size="small" className="study-card">
@@ -174,6 +175,9 @@ function StudyCard({ study, onThumbError }: { study: StudyDto; onThumbError: () 
           <div className="study-card__title">
             <Tag color="blue">{study.modality}</Tag>
             <Tag>{study.bodyPart}</Tag>
+            {isVolumeInput(study.inputType) && (
+              <Tag color="geekblue">{t('caseDetail.volume', { dims: dims ?? '' })}</Tag>
+            )}
             <Typography.Text type="secondary">
               {formatDateTime(study.createdAt, i18n.language)}
             </Typography.Text>
@@ -226,7 +230,8 @@ function StudyJobsTable({ studyId }: { studyId: string }) {
       key: 'top',
       render: (_, r) => {
         const top = sortFindings(r.findings)[0];
-        return top ? `${top.label} · ${formatPercent(top.confidence)}` : t('common.none');
+        if (isSegmentationResult(r)) return t('ai.structures', { count: r.findings.length });
+        return top ? `${top.label} · ${findingValue(top, i18n.language)}` : t('common.none');
       },
     },
     {

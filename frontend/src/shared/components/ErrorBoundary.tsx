@@ -6,6 +6,8 @@ interface ErrorBoundaryProps {
   children: ReactNode;
   /** Changing this value resets the boundary (e.g. pass the current pathname). */
   resetKey?: unknown;
+  /** Rendered instead of the generic fallback. */
+  fallback?: ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -37,6 +39,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   override render(): ReactNode {
     if (!this.state.error) return this.props.children;
+    if (this.props.fallback !== undefined) return this.props.fallback;
     return (
       <ErrorFallback
         message={this.state.error.message}

@@ -40,3 +40,28 @@ export function downloadBlob(blob: Blob, fileName: string): void {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+function numberLocale(language: string): string {
+  return language === 'vi' ? 'vi-VN' : 'en-GB';
+}
+
+/** Volume in millilitres: one decimal under 10 ml, whole millilitres above ("1,520 ml"). */
+export function formatVolumeMl(ml: number, language: string): string {
+  const digits = Math.abs(ml) < 10 ? 1 : 0;
+  const value = new Intl.NumberFormat(numberLocale(language), {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(ml);
+  return `${value} ml`;
+}
+
+/** LPS millimetres, one decimal: "12.3, -4.0, 101.5". */
+export function formatPoint(point: readonly number[], language: string): string {
+  const format = new Intl.NumberFormat(numberLocale(language), {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+  return point
+    .map((v) => format.format(Math.abs(v) < 0.05 ? 0 : v))
+    .join(language === 'vi' ? '; ' : ', ');
+}

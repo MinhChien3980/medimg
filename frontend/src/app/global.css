@@ -436,6 +436,12 @@ body {
   background: var(--viewer-panel);
 }
 
+.viewer-toolbar .ant-btn:disabled {
+  color: #5d7180;
+  border-color: #2a3a48;
+  background: transparent;
+}
+
 .viewer-toolbar__opacity {
   display: flex;
   align-items: center;
@@ -517,6 +523,302 @@ body {
   color: #9fd8dc;
   text-shadow: 0 1px 2px #000;
   pointer-events: none;
+}
+
+/* ---------- Volume viewer (MPR | 3D) ---------- */
+.viewer-page--loading {
+  display: block;
+  padding: 24px;
+}
+
+.viewer-toolbar__value {
+  font:
+    12px/1.4 ui-monospace,
+    'Cascadia Code',
+    Menlo,
+    monospace;
+  color: #9fd8dc;
+}
+
+.volume-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  color: inherit;
+}
+
+.volume-tabs > .ant-tabs-nav {
+  margin: 0 !important;
+  padding: 0 12px;
+  background: var(--viewer-panel);
+}
+
+.volume-tabs > .ant-tabs-nav::before {
+  border-bottom-color: var(--viewer-border) !important;
+}
+
+.volume-tabs .ant-tabs-tab {
+  color: #9fb3c2;
+}
+
+.volume-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--teal-300);
+}
+
+.volume-tabs > .ant-tabs-body-holder,
+.volume-tabs > .ant-tabs-body-holder > .ant-tabs-body,
+.volume-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content-active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.volume-tabs__info .ant-tag {
+  margin-inline-end: 4px;
+}
+
+.volume-tabs__empty {
+  margin: auto;
+  color: #9fb3c2;
+}
+
+.mpr-view,
+.mesh-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.mpr-view__notice {
+  margin: 8px 12px 0;
+}
+
+.mpr-view__grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2px;
+  background: var(--viewer-border);
+}
+
+.mpr-view__cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+}
+
+.mpr-view__cell--axial {
+  grid-row: 1 / span 2;
+}
+
+.mpr-view__viewport {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+
+.mpr-view__viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--teal-300);
+}
+
+.mpr-view__label {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  text-shadow: 0 1px 2px #000;
+}
+
+.mpr-view__label--axial {
+  color: rgb(239, 83, 80);
+}
+
+.mpr-view__label--coronal {
+  color: rgb(102, 187, 106);
+}
+
+.mpr-view__label--sagittal {
+  color: rgb(255, 202, 40);
+}
+
+.mpr-view__status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #c5d4df;
+  background: rgba(5, 8, 11, 0.6);
+}
+
+.mpr-view__status--error {
+  color: #ff7a45;
+}
+
+.mpr-view__badge {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #c5d4df;
+  background: rgba(13, 22, 32, 0.85);
+}
+
+.mesh-view__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+.mesh-view__canvas {
+  position: relative;
+  min-height: 0;
+  background: var(--viewer-bg);
+}
+
+.mesh-scene {
+  position: absolute !important;
+  inset: 0;
+}
+
+.mesh-view__clip {
+  margin: 0;
+  padding: 12px;
+  border: 0;
+  border-left: 1px solid var(--viewer-border);
+  background: var(--viewer-panel);
+  overflow-y: auto;
+}
+
+.mesh-view__clip legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #7f95a6;
+}
+
+.mesh-view__axis {
+  clear: both;
+  margin-bottom: 8px;
+}
+
+.mesh-view__axis-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #c5d4df;
+}
+
+.mesh-view__axis-range {
+  font-variant-numeric: tabular-nums;
+  color: #7f95a6;
+}
+
+.mesh-view__hint {
+  clear: both;
+  margin-top: 12px;
+  font-size: 11px;
+  color: #6d8394 !important;
+}
+
+/* ---------- Structures (segmentation run) ---------- */
+.structure-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.structure-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.structures__bulk {
+  margin-bottom: 6px;
+}
+
+.structures__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.structure-row {
+  padding: 4px 0;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.structure-row__main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.structure-row__color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #d0d7dd;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.structure-row__color:focus-visible {
+  outline: 2px solid var(--teal-500);
+  outline-offset: 1px;
+}
+
+.structure-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.structure-row__flag {
+  margin-left: 6px;
+  font-size: 11px;
+}
+
+.structure-row__volume {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: #5b6b78;
+}
+
+.structure-row__opacity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 30px;
+  font-size: 11px;
+  color: #6b7c88;
+}
+
+.structure-row__opacity .ant-slider {
+  flex: 1;
+  margin: 4px 6px;
 }
 
 /* ---------- AI panel ---------- */
@@ -693,5 +995,13 @@ body {
   }
   .viewer-page__center {
     height: 70vh;
+  }
+  .mesh-view__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .mesh-view__clip {
+    border-left: 0;
+    border-top: 1px solid var(--viewer-border);
   }
 }

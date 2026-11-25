@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { modelsApi, predictionsApi, studiesApi } from '@/api/endpoints';
 import { queryKeys } from '@/api/queryKeys';
-import type { PredictionDto, Uuid } from '@/api/types';
+import type { InputType, PredictionDto, PredictionParams, Uuid } from '@/api/types';
 import { newUuid } from '@/shared/lib/format';
 
-export function useImageModels() {
+/** Models that accept the given study input type (`GET /models?inputType=`). */
+export function useModels(inputType: InputType) {
   return useQuery({
-    queryKey: queryKeys.models.list('IMAGE_2D'),
-    queryFn: () => modelsApi.list('IMAGE_2D'),
+    queryKey: queryKeys.models.list(inputType),
+    queryFn: () => modelsApi.list(inputType),
     staleTime: 5 * 60_000,
   });
 }
@@ -24,15 +25,16 @@ export interface RunPredictionInput {
   studyId: Uuid;
   seriesId: Uuid;
   modelCode: string;
-  threshold: number;
+  /** `{ threshold }` for classification; segmentation takes none (`{}`). */
+  params: PredictionParams;
 }
 
 /** `POST /predictions` with a fresh Idempotency-Key per click. */
 export function useRunPrediction() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ studyId, seriesId, modelCode, threshold }: RunPredictionInput) =>
-      predictionsApi.create({ studyId, seriesId, modelCode, params: { threshold } }, newUuid()),
+    mutationFn: ({ studyId, seriesId, modelCode, params }: RunPredictionInput) =>
+      predictionsApi.create({ studyId, seriesId, modelCode, params }, newUuid()),
     onSuccess: (_res, input) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.studies.predictions(input.studyId),

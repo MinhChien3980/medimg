@@ -127,11 +127,19 @@ export interface UploadDto {
   status: UploadStatus;
   error: string | null;
   studyId: Uuid | null;
+  /** Server-side processing progress, 0..100. */
+  progress: number;
+  /** Detected from the file's magic bytes; null until the server has identified it. */
+  inputType: InputType | null;
 }
 
 // ---------- Studies ----------
 
-export type InputType = 'IMAGE_2D';
+/** `IMAGE_2D`: PNG/JPG. `NIFTI` / `DICOM_SERIES`: CT volume, normalised to one NIfTI file. */
+export type InputType = 'IMAGE_2D' | 'NIFTI' | 'DICOM_SERIES';
+
+/** `[x, y, z]`. In patient space: LPS millimetres (the DICOM convention Cornerstone3D uses). */
+export type Vec3 = [number, number, number];
 
 export interface SeriesDto {
   id: Uuid;
@@ -139,10 +147,16 @@ export interface SeriesDto {
   rows: number;
   cols: number;
   numImages: number;
-  /** Presigned GET URL, valid for 15 minutes. */
-  imageUrl: string;
-  /** Presigned GET URL, valid for 15 minutes. */
+  /** Presigned GET URL of the 2D image (valid for 15 minutes); null for a volume. */
+  imageUrl: string | null;
+  /** Presigned GET URL, valid for 15 minutes. Always present (middle axial slice for a volume). */
   thumbnailUrl: string;
+  /** Presigned GET URL of the normalised `volume.nii.gz` (canonical RAS, int16 HU); null for 2D. */
+  volumeUrl: string | null;
+  /** Voxel grid `[x, y, z]`; null for 2D. */
+  dims: Vec3 | null;
+  /** Voxel spacing `[sx, sy, sz]` in mm; null for 2D. */
+  spacing: Vec3 | null;
 }
 
 export interface StudyDto {
@@ -157,12 +171,15 @@ export interface StudyDto {
 
 // ---------- Models ----------
 
+export type ModelTask = 'CLASSIFICATION_2D' | 'SEGMENTATION_3D';
+
 export interface ModelDto {
   id: Uuid;
   code: string;
   version: string;
   name: string;
-  task: string;
+  task: ModelTask;
+  /** Output labels in model order. For segmentation, label `i` is voxel value `i + 1`. */
   labels: string[];
 }
 
@@ -193,10 +210,37 @@ export type BBox = [number, number, number, number];
 export interface FindingDto {
   id: Uuid;
   label: string;
-  /** 0..1 */
-  confidence: number;
+  /** 0..1; null for a segmented structure. */
+  confidence: number | null;
+  /** Volume of a segmented structure in millilitres; null for 2D findings. */
+  volumeMl: number | null;
   bbox: BBox | null;
   reviewStatus: 'PENDING';
+}
+
+/** One segmented structure rendered as a mesh. */
+export interface MeshArtifact {
+  label: string;
+  /** `#RRGGBB` */
+  color: string;
+  /** Presigned GET URL of the GLB (vertices in LPS mm). */
+  url: string;
+  triangles: number;
+  volumeMl: number;
+  /** Centre of mass in LPS mm, the world space of the MPR viewer. */
+  centroid: Vec3;
+}
+
+export interface PredictionArtifacts {
+  /** Maps a finding label to a presigned PNG (RGBA, same size as the image). Empty for volumes. */
+  heatmaps: Record<string, string>;
+  /**
+   * Presigned URL of `segmentation.nii.gz` (uint8, same grid and affine as the volume); voxel value
+   * `i + 1` is the i-th label of the model (`ModelDto.labels`), 0 is background. Null for 2D.
+   */
+  segmentation: string | null;
+  /** One entry per structure present (at least 1 ml); empty for 2D. */
+  meshes: MeshArtifact[];
 }
 
 export interface PredictionDto {
@@ -215,8 +259,7 @@ export interface PredictionDto {
   /** Parameters the job was started with (empty object when none were sent). */
   params: PredictionParams;
   findings: FindingDto[];
-  /** `heatmaps` maps a finding label to a presigned PNG (RGBA, same size as the image). */
-  artifacts: { heatmaps: Record<string, string> } | null;
+  artifacts: PredictionArtifacts | null;
 }
 
 /** Payload of the SSE `progress` event. `done` / `failed` events carry a full PredictionDto. */
@@ -240,4 +283,11 @@ export const TERMINAL_UPLOAD_STATUSES: readonly UploadStatus[] = ['DONE', 'FAILE
 
 export function isTerminalUpload(status: UploadStatus): boolean {
   return TERMINAL_UPLOAD_STATUSES.includes(status);
+}
+
+export const VOLUME_INPUT_TYPES: readonly InputType[] = ['NIFTI', 'DICOM_SERIES'];
+
+/** NIfTI and DICOM series studies are both served as one normalised NIfTI volume. */
+export function isVolumeInput(inputType: InputType | null | undefined): boolean {
+  return !!inputType && VOLUME_INPUT_TYPES.includes(inputType);
 }

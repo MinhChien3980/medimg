@@ -60,7 +60,7 @@ export function FindingsTable({
       dataIndex: 'label',
       render: (label: string, f) => {
         const hasHeatmap = !!heatmaps[label];
-        const strong = f.confidence >= threshold;
+        const strong = (f.confidence ?? 0) >= threshold;
         if (!hasHeatmap) {
           return (
             <Tooltip title={t('ai.noHeatmap')}>
@@ -91,7 +91,7 @@ export function FindingsTable({
       title: t('ai.confidence'),
       dataIndex: 'confidence',
       width: '55%',
-      render: (v: number) => <ConfidenceBar value={v} threshold={threshold} />,
+      render: (v: number | null) => <ConfidenceBar value={v ?? 0} threshold={threshold} />,
     },
   ];
 
@@ -108,7 +108,7 @@ export function FindingsTable({
         dataSource={rows}
         pagination={false}
         locale={{ emptyText: t('ai.noFindings') }}
-        rowClassName={(f) => (f.confidence >= threshold ? 'finding-row--above' : '')}
+        rowClassName={(f) => ((f.confidence ?? 0) >= threshold ? 'finding-row--above' : '')}
       />
     </div>
   );

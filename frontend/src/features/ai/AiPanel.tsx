@@ -13,41 +13,56 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { errorMessage } from '@/api/problem';
-import type { CreatePredictionResponse, PredictionDto, Uuid } from '@/api/types';
+import type { CreatePredictionResponse, InputType, PredictionDto, Uuid } from '@/api/types';
 import { useCan } from '@/features/auth/permissions';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
-import { formatDateTime, formatPercent } from '@/shared/lib/format';
+import { formatDateTime } from '@/shared/lib/format';
 import { FindingsTable } from './FindingsTable';
-import { DEFAULT_THRESHOLD, runThreshold, sortFindings } from './findings';
 import {
-  useImageModels,
-  usePredictionAction,
-  useRunPrediction,
-  useStudyPredictions,
-} from './hooks';
+  DEFAULT_THRESHOLD,
+  findingValue,
+  isSegmentationModel,
+  isSegmentationResult,
+  runThreshold,
+  sortFindings,
+} from './findings';
+import { useModels, usePredictionAction, useRunPrediction, useStudyPredictions } from './hooks';
 import { PredictionStatusTag } from './PredictionStatusTag';
+import { StructuresTable } from './StructuresTable';
 import { usePredictionLive } from './usePredictionLive';
 
 export interface AiPanelProps {
   studyId: Uuid;
+  /** Input type of the study: only models that accept it are offered. */
+  inputType: InputType;
   seriesId: Uuid | null;
-  /** Run shown in the panel (and whose heatmaps the viewer can overlay). */
+  /** Run shown in the panel (and whose heatmaps / labelmap the viewer can overlay). */
   jobId: Uuid | null;
   onSelectJob: (jobId: Uuid) => void;
-  visibleHeatmaps: readonly string[];
-  onToggleHeatmap: (label: string) => void;
+  visibleHeatmaps?: readonly string[];
+  onToggleHeatmap?: (label: string) => void;
+  /**
+   * Renders the structures of a finished segmentation run (e.g. with viewer controls).
+   * Defaults to a read-only table of structures and volumes.
+   */
+  renderSegmentation?: (prediction: PredictionDto) => ReactNode;
 }
+
+const NO_HEATMAPS: readonly string[] = [];
+const ignoreHeatmap = () => undefined;
 
 export function AiPanel({
   studyId,
+  inputType,
   seriesId,
   jobId,
   onSelectJob,
-  visibleHeatmaps,
-  onToggleHeatmap,
+  visibleHeatmaps = NO_HEATMAPS,
+  onToggleHeatmap = ignoreHeatmap,
+  renderSegmentation,
 }: AiPanelProps) {
   const { t } = useTranslation();
   const can = useCan();
@@ -66,7 +81,12 @@ export function AiPanel({
           <ExperimentOutlined /> {t('ai.title')}
         </Typography.Title>
         {can('runAi') && (
-          <RunControls studyId={studyId} seriesId={seriesId} onStarted={onStarted} />
+          <RunControls
+            studyId={studyId}
+            inputType={inputType}
+            seriesId={seriesId}
+            onStarted={onStarted}
+          />
         )}
       </div>
 
@@ -78,6 +98,7 @@ export function AiPanel({
             canManage={can('manageJob')}
             visibleHeatmaps={visibleHeatmaps}
             onToggleHeatmap={onToggleHeatmap}
+            renderSegmentation={renderSegmentation}
           />
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('ai.selectRun')} />
@@ -100,24 +121,32 @@ export function AiPanel({
 
 interface RunControlsProps {
   studyId: Uuid;
+  inputType: InputType;
   seriesId: Uuid | null;
   onStarted: (res: CreatePredictionResponse) => void;
 }
 
-function RunControls({ studyId, seriesId, onStarted }: RunControlsProps) {
+function RunControls({ studyId, inputType, seriesId, onStarted }: RunControlsProps) {
   const { t } = useTranslation();
   const { message } = App.useApp();
-  const models = useImageModels();
+  const models = useModels(inputType);
   const run = useRunPrediction();
   const [modelCode, setModelCode] = useState<string | null>(null);
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
 
   const effectiveModel = modelCode ?? models.data?.[0]?.code ?? null;
+  const segmentation = isSegmentationModel(models.data?.find((m) => m.code === effectiveModel));
 
   const onRun = () => {
     if (!seriesId || !effectiveModel) return;
     run.mutate(
-      { studyId, seriesId, modelCode: effectiveModel, threshold },
+      {
+        studyId,
+        seriesId,
+        modelCode: effectiveModel,
+        // Segmentation takes no parameters; a threshold only applies to classification.
+        params: segmentation ? {} : { threshold },
+      },
       {
         onSuccess: (res) => {
           void message.success(t('ai.started'));
@@ -151,21 +180,27 @@ function RunControls({ studyId, seriesId, onStarted }: RunControlsProps) {
       />
 
       <div className="ai-panel__run">
-        <Space size={6}>
-          <label className="field-label" htmlFor="ai-threshold" style={{ margin: 0 }}>
-            {t('ai.threshold')}
-          </label>
-          <InputNumber
-            id="ai-threshold"
-            size="small"
-            min={0.05}
-            max={0.95}
-            step={0.05}
-            value={threshold}
-            onChange={(v) => setThreshold(typeof v === 'number' ? v : DEFAULT_THRESHOLD)}
-            style={{ width: 80 }}
-          />
-        </Space>
+        {segmentation ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t('ai.segmentationHint')}
+          </Typography.Text>
+        ) : (
+          <Space size={6}>
+            <label className="field-label" htmlFor="ai-threshold" style={{ margin: 0 }}>
+              {t('ai.threshold')}
+            </label>
+            <InputNumber
+              id="ai-threshold"
+              size="small"
+              min={0.05}
+              max={0.95}
+              step={0.05}
+              value={threshold}
+              onChange={(v) => setThreshold(typeof v === 'number' ? v : DEFAULT_THRESHOLD)}
+              style={{ width: 80 }}
+            />
+          </Space>
+        )}
         <Button
           type="primary"
           icon={<ExperimentOutlined />}
@@ -173,7 +208,7 @@ function RunControls({ studyId, seriesId, onStarted }: RunControlsProps) {
           loading={run.isPending}
           disabled={!seriesId || !effectiveModel}
         >
-          {t('ai.run')}
+          {t(segmentation ? 'ai.runSegmentation' : 'ai.run')}
         </Button>
       </div>
     </>
@@ -186,6 +221,7 @@ interface RunDetailsProps {
   canManage: boolean;
   visibleHeatmaps: readonly string[];
   onToggleHeatmap: (label: string) => void;
+  renderSegmentation: ((prediction: PredictionDto) => ReactNode) | undefined;
 }
 
 function RunDetails({
@@ -194,6 +230,7 @@ function RunDetails({
   canManage,
   visibleHeatmaps,
   onToggleHeatmap,
+  renderSegmentation,
 }: RunDetailsProps) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -275,7 +312,30 @@ function RunDetails({
         />
       )}
 
-      {p.status === 'DONE' && (
+      {p.status === 'DONE' && isSegmentationResult(p) && (
+        <>
+          <div className="run-details__meta">
+            <Typography.Text strong>
+              {t('ai.structures', { count: p.findings.length })}
+            </Typography.Text>
+            {p.inferenceMs != null && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t('ai.inference', { ms: p.inferenceMs })}
+              </Typography.Text>
+            )}
+          </div>
+          {renderSegmentation ? (
+            renderSegmentation(p)
+          ) : (
+            <StructuresTable findings={p.findings} meshes={p.artifacts?.meshes ?? []} />
+          )}
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
+            {t('ai.disclaimer')}
+          </Typography.Paragraph>
+        </>
+      )}
+
+      {p.status === 'DONE' && !isSegmentationResult(p) && (
         <>
           <div className="run-details__meta">
             <Typography.Text strong>{t('ai.findings')}</Typography.Text>
@@ -322,6 +382,11 @@ function RunHistory({ runs, loading, selectedJobId, onSelect }: RunHistoryProps)
       renderItem={(r) => {
         const top = sortFindings(r.findings)[0];
         const selected = r.jobId === selectedJobId;
+        const summary = isSegmentationResult(r)
+          ? t('ai.structures', { count: r.findings.length })
+          : top
+            ? `${top.label} ${findingValue(top, i18n.language)}`
+            : '';
         return (
           <List.Item
             className={`run-history__item${selected ? ' run-history__item--selected' : ''}`}
@@ -340,7 +405,7 @@ function RunHistory({ runs, loading, selectedJobId, onSelect }: RunHistoryProps)
               </span>
               <span className="run-history__sub">
                 {r.model.code}@{r.model.version}
-                {top ? ` · ${top.label} ${formatPercent(top.confidence)}` : ''}
+                {summary ? ` · ${summary}` : ''}
               </span>
             </button>
           </List.Item>
