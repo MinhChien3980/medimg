@@ -154,3 +154,7 @@ Pushes to `main` run every job, including the real-model tests.
 Only public or anonymised data. An upload is a single PNG or JPEG of at most 50 MB and 50 megapixels. It is
 re-encoded, which strips all embedded metadata; text burned into the pixels is **not** removed. Model weights:
 TorchXRayVision (Apache-2.0); check the licence of each dataset before any non-research use.
+
+## License
+
+[MIT](LICENSE). Third-party model weights and datasets keep their own licences (see above).
