@@ -1,7 +1,8 @@
 # MedImg – AI Medical Imaging & 3D Visualization Platform
 
-Web platform where clinicians upload chest X-rays and CT scans, run AI analysis and review the results: Grad-CAM
-heatmaps for X-rays, and for CT a three-plane MPR viewer with organ segmentation and rotatable 3D organ models.
+Web platform where clinicians upload chest X-rays (PNG, JPEG or DICOM) and CT scans (NIfTI or a DICOM series), run AI
+analysis and review the results: Grad-CAM heatmaps for X-rays, and for CT a three-plane MPR viewer with organ
+segmentation and rotatable 3D organ models. Ready-made sample cases let anyone try it without data of their own.
 **Research demo – not for diagnostic use.**
 
 ## Status
@@ -10,7 +11,7 @@ heatmaps for X-rays, and for CT a three-plane MPR viewer with organ segmentation
 | --- | --- | --- |
 | 1 | Login (JWT) → cases → X-ray upload → AI job over Redis Streams → TorchXRayVision findings + Grad-CAM heatmaps, live progress (SSE) | ✅ done |
 | 2a | CT upload (NIfTI, DICOM series ZIP) → ingest to a normalised volume → MPR viewer (Cornerstone3D) → TotalSegmentator organ segmentation on CPU → labelmap overlay + 3D organ meshes (three.js) with volumes | ✅ done |
-| 2b | DICOM X-ray input, image stacks, multipart upload for large files, sample-case gallery | planned |
+| 2b | DICOM X-ray input, ZIPs of PNG/JPEG slices, multipart upload for files over 64 MB, sample-case gallery | ✅ done |
 | 3 | Finding review, annotations, PDF reports | planned |
 | 4 | Dashboard, admin, audit UI, E2E tests, cloud deploy | planned |
 
@@ -24,15 +25,21 @@ ai-worker     (Python 3.12, PyTorch CPU/GPU)  ◄── ai.jobs.* / ai.results �
 ingest-worker (same image, WORKER_ROLE=ingest) ◄── imaging.jobs / imaging.results ──► core-service
 ```
 
-- **core-service** (`backend/core-service`): modules `identity`, `patient`, `imaging`, `prediction`, `audit` with
+- **core-service** (`backend/core-service`): modules `identity`, `patient`, `imaging`, `prediction`, `sample`, `audit` with
   ports & adapters; module boundaries enforced by ArchUnit. RS256 JWT with rotating refresh tokens, RFC 7807 errors,
   Flyway, append-only monthly-partitioned audit log (the app's DB role cannot update or delete it).
 - **AI job pipeline**: attempt-aware state machine (QUEUED → RUNNING → DONE/FAILED), dispatch through a
   transactional outbox (no lost jobs between PostgreSQL and Redis), retries with backoff, watchdog for silent workers,
   GPU/CPU routing by worker heartbeat, idempotent job creation.
-- **CT ingest**: an uploaded NIfTI or ZIP of a DICOM series is checked by magic bytes, then normalised by the
-  ingest-worker into one canonical `volume.nii.gz` (int16 HU, RAS, true spacing, no DICOM tags) that the viewer and
-  the AI both read. ZIP handling guards against zip slip, nested archives and decompression bombs.
+- **Ingest**: PNG/JPEG X-rays are re-encoded in core-service; everything else is checked by magic bytes and handed to
+  the ingest-worker. A DICOM X-ray becomes an 8-bit PNG after the modality LUT, VOI LUT/window and MONOCHROME1
+  inversion (JPEG, JPEG-LS and JPEG 2000 decoded by GDCM). A ZIP is inspected: a DICOM series or a stack of PNG/JPEG
+  slices (natural file order, first file = most inferior slice, optional slice spacing) becomes one canonical
+  `volume.nii.gz` (RAS, true spacing, no DICOM tags) that the viewer and the AI both read. ZIP handling guards against
+  zip slip, nested archives and decompression bombs.
+- **Uploads**: the browser uploads straight to object storage through presigned URLs; files over 64 MB go as a
+  multipart upload in 32 MB parts (three in parallel, each retried), so they pass proxies with a 100 MB request limit.
+  Unfinished multipart uploads are aborted by a sweeper.
 - **ai-worker** (`ai/inference`): one image, two roles. `ai` runs TorchXRayVision DenseNet-121 with Grad-CAM for X-rays
   and TotalSegmentator 2.18 (`--fast`, CPU) for CT, merging its classes into 21 structures and building one smoothed,
   decimated GLB mesh per organ in patient LPS millimetres; `ingest` normalises CT uploads.
@@ -58,6 +65,7 @@ ingest-worker (same image, WORKER_ROLE=ingest) ◄── imaging.jobs / imaging.
 | Rotating refresh tokens with reuse detection | Each refresh token works once; presenting a used one revokes all of the user's sessions | [`AuthService`](backend/core-service/src/main/java/com/medimg/identity/application/AuthService.java) |
 | Role-based access in one place | Read, write and admin policies are named once on the server and mirrored by one helper in the UI | [`AccessPolicy`](backend/core-service/src/main/java/com/medimg/shared/security/AccessPolicy.java), [`permissions.ts`](frontend/src/features/auth/permissions.ts) |
 | Append-only audit log | Written asynchronously from domain events; the application's database role has no UPDATE or DELETE on it | [`AuditWriter`](backend/core-service/src/main/java/com/medimg/audit/application/AuditWriter.java), [`V3__audit.sql`](backend/core-service/src/main/resources/db/migration/V3__audit.sql) |
+| Multipart upload through presigned part URLs | Large CTs never pass through the API, each part URL signs its exact byte length, ETags are checked on completion, and abandoned uploads are aborted | [`UploadService`](backend/core-service/src/main/java/com/medimg/imaging/application/UploadService.java), [`multipartUpload.ts`](frontend/src/api/multipartUpload.ts) |
 | Defensive file intake | Magic-byte detection of PNG/JPEG/ZIP/NIfTI, size limits read from headers before decoding, metadata stripped by re-encoding, safe ZIP extraction, a grid-size cap so a huge CT cannot OOM-kill the AI worker, and a sweep that fails uploads stuck after a crash | [`FileTypeDetector`](backend/core-service/src/main/java/com/medimg/imaging/application/FileTypeDetector.java), [`ImageNormalizer`](backend/core-service/src/main/java/com/medimg/imaging/application/ImageNormalizer.java), [`archive.py`](ai/inference/worker/ingest/archive.py), [`StaleUploadSweeper`](backend/core-service/src/main/java/com/medimg/imaging/application/StaleUploadSweeper.java) |
 
 Not used on purpose: CQRS, event sourcing, sagas and circuit breakers. They add moving parts that a single service
@@ -87,8 +95,8 @@ The OpenAPI document is served by core-service at `/v3/api-docs` (Swagger UI: `/
 | `ai.results` | worker → core (group `core`) | `jobId`, `attempt`, `workerId`, `type` (`STARTED`/`PROGRESS`/`DONE`/`FAILED`), `progress`, `payload` (DONE, JSON), `error` + `retryable` (FAILED) |
 | `ai:worker:{kind}:{workerId}` | worker heartbeat, TTL 30 s | core routes to `gpu` only while a GPU worker is alive |
 | `ai:job:{jobId}:cancelled` | core → worker | worker skips the job and ACKs it without a result |
-| `imaging.jobs` | core → ingest-worker (group `ingest-workers`, created by the worker) | `uploadId`, `attempt`, `inputType` (`NIFTI`/`DICOM_SERIES`), `inputUri`, `outputPrefix`, `modalityHint`, `bodyPartHint` |
-| `imaging.results` | ingest-worker → core (group `core-imaging`) | `uploadId`, `attempt`, `workerId`, `type`, `progress`, `payload` (DONE: `volumeUri`, `thumbnailUri`, `modality`, `dims`, `spacing`, …), `error` + `retryable` |
+| `imaging.jobs` | core → ingest-worker (group `ingest-workers`, created by the worker) | `uploadId`, `attempt`, `inputType` (`DICOM_2D`/`ZIP`/`NIFTI`), `inputUri`, `outputPrefix`, `modalityHint`, `bodyPartHint`, `sliceSpacingMm` (JSON `[x,y,z]` or empty) |
+| `imaging.results` | ingest-worker → core (group `core-imaging`) | `uploadId`, `attempt`, `workerId`, `type`, `progress`, `payload` (DONE: the final `inputType` – `DICOM_2D`, `DICOM_SERIES`, `IMAGE_STACK` or `NIFTI` – with `imageUri` for 2D or `volumeUri` and `spacingAssumed` for volumes, plus `thumbnailUri`, `modality`, `dims`, `spacing`), `error` + `retryable` |
 | `ai.results.dlq`, `imaging.results.dlq` | core | result messages that could not be applied after 5 deliveries, kept for inspection |
 
 A CT segmentation (`ct-totalseg`) uses the same job streams. Its DONE payload carries one finding per organ with
@@ -136,14 +144,16 @@ Open http://localhost:8088. The API is also published on http://localhost:8080 (
 ### Sample CT scans
 
 Two CT scans from the TotalSegmentator dataset can be fetched (about 65 MB; only the needed files are downloaded from
-the 3.2 GB archive) and uploaded into a running stack:
+the 3.2 GB archive) and loaded into a running stack as sample cases:
 
 ```bash
-python tools/fetch_samples.py                                   # -> data/samples/ (git-ignored)
-python tools/seed_samples.py --base-url http://localhost:8088   # creates SAMPLE-* cases and uploads them
+python tools/fetch_samples.py                                               # -> data/samples/ (git-ignored)
+python tools/seed_samples.py --base-url http://localhost:8088 --segment     # upload, mark as samples, segment
 ```
 
-Open a sample case, then its study, and run "CT organ segmentation" from the AI panel.
+The seed script logs in as `admin`, uploads each scan, marks the case as a sample (with its source and licence) and,
+with `--segment`, runs the organ segmentation so the results are ready. Every role then finds them under
+**Sample cases** (`/samples`).
 
 ### Option B: development mode
 
@@ -189,10 +199,14 @@ Pushes to `main` run every job, including the real-model tests.
 
 ## Data and licences
 
-Only public or anonymised data. An X-ray upload is a single PNG or JPEG of at most 50 MB and 50 megapixels; it is
-re-encoded, which strips all embedded metadata. A CT upload is one NIfTI (`.nii`, `.nii.gz`) or one ZIP of a DICOM
-series, at most 500 MB; it is converted to NIfTI and no DICOM tag is kept. Text burned into the pixels is **not**
-removed.
+Only public or anonymised data.
+
+- X-ray: one PNG, JPEG or DICOM file (`.dcm`, CR/DX), at most 50 MB and 50 megapixels. It is re-encoded to PNG, which
+  drops all embedded metadata and every DICOM tag.
+- Volume: one NIfTI (`.nii`, `.nii.gz`), or one ZIP of a DICOM series or of PNG/JPEG slices, at most 500 MB. It is
+  converted to NIfTI and no DICOM tag is kept. Without a slice spacing an image stack assumes 1 mm, and the viewer
+  says so.
+- Text burned into the pixels is **not** removed.
 
 - Model weights: TorchXRayVision (Apache-2.0), TotalSegmentator (Apache-2.0).
 - Sample CT scans: TotalSegmentator dataset, small subset ([Zenodo 10047263](https://zenodo.org/records/10047263)),
