@@ -2,7 +2,8 @@
 
 Web platform where clinicians upload chest X-rays (PNG, JPEG or DICOM) and CT scans (NIfTI or a DICOM series), run AI
 analysis and review the results: Grad-CAM heatmaps for X-rays, and for CT a three-plane MPR viewer with organ
-segmentation and rotatable 3D organ models. Ready-made sample cases let anyone try it without data of their own.
+segmentation and rotatable 3D organ models. Doctors review the AI findings, annotate and measure, and sign a PDF
+report. Ready-made sample cases let anyone try it without data of their own.
 **Research demo – not for diagnostic use.**
 
 ## Status
@@ -12,7 +13,7 @@ segmentation and rotatable 3D organ models. Ready-made sample cases let anyone t
 | 1 | Login (JWT) → cases → X-ray upload → AI job over Redis Streams → TorchXRayVision findings + Grad-CAM heatmaps, live progress (SSE) | ✅ done |
 | 2a | CT upload (NIfTI, DICOM series ZIP) → ingest to a normalised volume → MPR viewer (Cornerstone3D) → TotalSegmentator organ segmentation on CPU → labelmap overlay + 3D organ meshes (three.js) with volumes | ✅ done |
 | 2b | DICOM X-ray input, ZIPs of PNG/JPEG slices, multipart upload for files over 64 MB, sample-case gallery | ✅ done |
-| 3 | Finding review, annotations, PDF reports | planned |
+| 3 | Finding review (accept / edit / reject, manual findings), annotations and measurements on X-ray and CT, signed PDF reports with key images and amendments | ✅ done |
 | 4 | Dashboard, admin, audit UI, E2E tests, cloud deploy | planned |
 
 ## Architecture
@@ -25,7 +26,7 @@ ai-worker     (Python 3.12, PyTorch CPU/GPU)  ◄── ai.jobs.* / ai.results �
 ingest-worker (same image, WORKER_ROLE=ingest) ◄── imaging.jobs / imaging.results ──► core-service
 ```
 
-- **core-service** (`backend/core-service`): modules `identity`, `patient`, `imaging`, `prediction`, `sample`, `audit` with
+- **core-service** (`backend/core-service`): modules `identity`, `patient`, `imaging`, `prediction`, `annotation`, `report`, `sample`, `audit` with
   ports & adapters; module boundaries enforced by ArchUnit. RS256 JWT with rotating refresh tokens, RFC 7807 errors,
   Flyway, append-only monthly-partitioned audit log (the app's DB role cannot update or delete it).
 - **AI job pipeline**: attempt-aware state machine (QUEUED → RUNNING → DONE/FAILED), dispatch through a
@@ -67,6 +68,10 @@ ingest-worker (same image, WORKER_ROLE=ingest) ◄── imaging.jobs / imaging.
 | Append-only audit log | Written asynchronously from domain events; the application's database role has no UPDATE or DELETE on it | [`AuditWriter`](backend/core-service/src/main/java/com/medimg/audit/application/AuditWriter.java), [`V3__audit.sql`](backend/core-service/src/main/resources/db/migration/V3__audit.sql) |
 | Multipart upload through presigned part URLs | Large CTs never pass through the API, each part URL signs its exact byte length, ETags are checked on completion, and abandoned uploads are aborted | [`UploadService`](backend/core-service/src/main/java/com/medimg/imaging/application/UploadService.java), [`multipartUpload.ts`](frontend/src/api/multipartUpload.ts) |
 | Defensive file intake | Magic-byte detection of PNG/JPEG/ZIP/NIfTI, size limits read from headers before decoding, metadata stripped by re-encoding, safe ZIP extraction, a grid-size cap so a huge CT cannot OOM-kill the AI worker, and a sweep that fails uploads stuck after a crash | [`FileTypeDetector`](backend/core-service/src/main/java/com/medimg/imaging/application/FileTypeDetector.java), [`ImageNormalizer`](backend/core-service/src/main/java/com/medimg/imaging/application/ImageNormalizer.java), [`archive.py`](ai/inference/worker/ingest/archive.py), [`StaleUploadSweeper`](backend/core-service/src/main/java/com/medimg/imaging/application/StaleUploadSweeper.java) |
+
+| Signed reports are immutable | A report is a draft until a doctor signs it; after that the domain refuses changes and a database trigger rejects any UPDATE or DELETE, so a correction is a new amended version that points at the original | [`Report`](backend/core-service/src/main/java/com/medimg/report/domain/Report.java), [`V7__review_annotations_reports.sql`](backend/core-service/src/main/resources/db/migration/V7__review_annotations_reports.sql) |
+| PDFs from templates, not string building | The report is an escaped Thymeleaf template with its own CSS and message bundles (vi/en), rendered by openhtmltopdf with an embedded font, so Vietnamese diacritics and layout are testable | [`report.html`](backend/core-service/src/main/resources/report/report.html), [`HtmlReportPdfRenderer`](backend/core-service/src/main/java/com/medimg/report/infrastructure/HtmlReportPdfRenderer.java) |
+| Annotations in the image's own coordinates | X-ray shapes are stored in image pixels and drawn through the viewer's transform; CT shapes are stored in patient LPS mm with their view plane, so they survive zoom, pan, window changes and reloads | [`AnnotationLayer2D`](frontend/src/features/annotations/AnnotationLayer2D.tsx), [`annotationConverters.ts`](frontend/src/features/viewer/volume/mpr/annotationConverters.ts) |
 
 Not used on purpose: CQRS, event sourcing, sagas and circuit breakers. They add moving parts that a single service
 with one database does not need yet.
@@ -175,8 +180,17 @@ On Windows, use Git Bash, or in PowerShell run steps 2 and 3 in their own termin
 
 ### Accounts and credentials
 
-Demo accounts: `doctor`, `tech`, `admin` and `researcher` (read-only: sees cases, images and AI results, cannot
-create, upload, run AI or delete) – password `Demo@12345`.
+Demo accounts, all with the password `Demo@12345`:
+
+| Account | Can |
+| --- | --- |
+| `doctor` | everything clinical: cases, uploads, AI runs, review findings, annotate, write and sign reports |
+| `tech` | cases, uploads, AI runs, own annotations; reads draft reports |
+| `admin` | cases, uploads, AI runs, delete cases, manage sample cases; reads draft reports |
+| `researcher` | read-only: cases, images, AI results, annotations and signed reports |
+
+Lesion boxes come from doctors' annotations: the planned box-detection model for chest X-rays (`cxr-detect`) is not
+part of the demo until it has been trained.
 
 All credentials in `deploy/` and `application.yml` are local-development defaults, not meant for a deployed
 environment. The services read them from environment variables (`DB_APP_PASSWORD`, `S3_SECRET_KEY`, `DEMO_PASSWORD`,
@@ -209,6 +223,8 @@ Only public or anonymised data.
 - Text burned into the pixels is **not** removed.
 
 - Model weights: TorchXRayVision (Apache-2.0), TotalSegmentator (Apache-2.0).
+- Report font: Noto Sans, SIL Open Font License 1.1
+  ([`OFL.txt`](backend/core-service/src/main/resources/report/fonts/OFL.txt)).
 - Sample CT scans: TotalSegmentator dataset, small subset ([Zenodo 10047263](https://zenodo.org/records/10047263)),
   CC BY 4.0 – Wasserthal J. et al., *TotalSegmentator: Robust Segmentation of 104 Anatomic Structures in CT Images*,
   Radiology: Artificial Intelligence, 2023.
