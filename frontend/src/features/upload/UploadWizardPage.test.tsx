@@ -160,10 +160,12 @@ describe('UploadWizardPage', () => {
     await user.click(screen.getByRole('button', { name: /Upload/ }));
 
     // Step 3: processing → done.
-    // Server-side processing progress comes from `UploadDto.progress`.
-    expect(
-      await screen.findByRole('progressbar', { name: 'Server processing progress' }),
-    ).toHaveAttribute('aria-valuenow', '30');
+    // Server-side processing progress comes from `UploadDto.progress`: 0 from `complete`, then 30
+    // from the first poll, so wait for the poll instead of reading the bar once.
+    const serverProgress = await screen.findByRole('progressbar', {
+      name: 'Server processing progress',
+    });
+    await waitFor(() => expect(serverProgress).toHaveAttribute('aria-valuenow', '30'));
     expect(await screen.findByText('Image is ready', {}, { timeout: 5000 })).toBeInTheDocument();
 
     expect(initBody).toEqual({
