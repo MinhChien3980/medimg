@@ -5,7 +5,7 @@ from botocore.exceptions import ClientError
 
 from tests.helpers import BUCKET
 from worker.errors import InvalidJobError, classify
-from worker.storage import S3Uri, make_s3_client
+from worker.storage import ObjectStorage, S3Uri, make_s3_client
 
 
 def test_parse_s3_uri():
@@ -41,3 +41,23 @@ def test_client_uses_path_style_addressing():
     assert client.meta.config.s3["addressing_style"] == "path"
     assert client.meta.endpoint_url == "http://seaweedfs:8333"
     assert client.meta.region_name == "us-east-1"
+
+
+def test_put_file_sets_only_the_content_type(tmp_path):
+    """No Content-Encoding on .nii.gz: viewers gunzip the bytes themselves, and a browser that
+    also honoured `Content-Encoding: gzip` would hand them already-inflated data."""
+    calls = []
+
+    class SpyClient:
+        def upload_file(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    path = tmp_path / "volume.nii.gz"
+    path.write_bytes(b"gz")
+    uri = ObjectStorage(SpyClient()).put_file(
+        f"s3://{BUCKET}/v/volume.nii.gz", path, "application/gzip"
+    )
+    assert uri == f"s3://{BUCKET}/v/volume.nii.gz"
+    assert calls == [
+        ((str(path), BUCKET, "v/volume.nii.gz"), {"ExtraArgs": {"ContentType": "application/gzip"}})
+    ]

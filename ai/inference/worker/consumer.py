@@ -1,39 +1,35 @@
-"""Redis Streams consumer: `ai.jobs.{kind}` (group `ai-workers`) -> pipeline -> `ai.results`.
+"""AI jobs: `ai.jobs.{kind}` (group `ai-workers`) -> pipeline -> `ai.results`.
 
-Ordering guarantees:
-- STARTED, PROGRESS..., then exactly one DONE or FAILED per processed delivery.
-- The DONE/FAILED result is XADDed *before* the job is XACKed, so a crash in between leaves the
-  job in this consumer's PEL and it is reprocessed on restart (core ignores stale or duplicate
-  results).
-- Cancelled jobs (`ai:job:{jobId}:cancelled`) are ACKed without a result.
+Stream mechanics (ordering, PEL replay, XADD before XACK) live in `worker.stream_consumer`; this
+module fetches the input, runs the pipeline and uploads its artifacts. Cancelled jobs
+(`ai:job:{jobId}:cancelled`) are ACKed without a result.
 """
 
 from __future__ import annotations
 
-import logging
-import threading
+import tempfile
 import time
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import redis
 
 from worker import messages
-from worker.errors import InvalidJobError, JobCancelled, JobError, classify
-from worker.logging_setup import job_context
-from worker.messages import CONSUMER_GROUP, RESULTS_STREAM, JobMessage
-from worker.pipelines.base import PipelineOutput
+from worker.messages import CONSUMER_GROUP, JobMessage
+from worker.pipelines.base import FilePipeline, Finding, PipelineOutput, ProgressCallback
 from worker.pipelines.registry import PipelineRegistry
 from worker.storage import ObjectStorage
+from worker.stream_consumer import BLOCK_MS, StreamConsumer, reported_attempt
 
-log = logging.getLogger(__name__)
+__all__ = ["BLOCK_MS", "AiJobWorkload", "JobConsumer", "reported_attempt", "sanitize_label"]
 
 PROGRESS_LOADED = 10
 PROGRESS_UPLOAD = 95
-BLOCK_MS = 5000
 
 HEATMAP_CONTENT_TYPE = "image/png"
 RESULT_CONTENT_TYPE = "application/json"
+SEGMENTATION_CONTENT_TYPE = "application/gzip"
+MESH_CONTENT_TYPE = "model/gltf-binary"
 
 
 def sanitize_label(label: str) -> str:
@@ -41,215 +37,63 @@ def sanitize_label(label: str) -> str:
     return label.strip().replace(" ", "_").replace("/", "_").replace("\\", "_")
 
 
-def reported_attempt(raw: str | None) -> int:
-    """Attempt echoed in the FAILED result of a malformed job: 0 when it is not a valid attempt,
-    which core treats as a permanent failure of the job's current attempt."""
-    try:
-        attempt = int(raw or "")
-    except ValueError:
-        return 0
-    return attempt if attempt >= 1 else 0
+def _input_name(uri: str) -> str:
+    """Local file name for a downloaded input; keeps the extension (nibabel relies on it)."""
+    name = uri.rsplit("/", 1)[-1]
+    return sanitize_label(name) or "input"
 
 
-@dataclass
-class _Progress:
-    """Emits PROGRESS events (monotonic) and checks for cancellation between steps."""
+class AiJobWorkload:
+    group = CONSUMER_GROUP
+    results = messages.AI_RESULTS
 
-    consumer: JobConsumer
-    job: JobMessage
-    last: int = 0
-
-    def __call__(self, pct: int) -> None:
-        self.consumer.raise_if_cancelled(self.job.job_id)
-        pct = max(self.last, min(99, int(pct)))
-        self.last = pct
-        self.consumer.emit(
-            messages.progress(self.job.job_id, self.job.attempt, self.consumer.worker_id, pct)
-        )
-
-
-class JobConsumer:
     def __init__(
-        self,
-        client: redis.Redis,
-        storage: ObjectStorage,
-        registry: PipelineRegistry,
-        kind: str,
-        worker_id: str,
-        block_ms: int = BLOCK_MS,
+        self, client: redis.Redis, storage: ObjectStorage, registry: PipelineRegistry, kind: str
     ) -> None:
         self.client = client
         self.storage = storage
         self.registry = registry
-        self.kind = kind
-        self.worker_id = worker_id
-        self.stream = messages.jobs_stream(kind)
-        self.block_ms = block_ms
-        self._stop = threading.Event()
+        self.jobs_stream = messages.jobs_stream(kind)
 
-    # ------------------------------------------------------------------ lifecycle
-    def ensure_group(self) -> None:
-        try:
-            self.client.xgroup_create(self.stream, CONSUMER_GROUP, id="0", mkstream=True)
-            log.info("created consumer group", extra={"stream": self.stream})
-        except redis.ResponseError as exc:
-            if "BUSYGROUP" not in str(exc):
-                raise
+    def parse(self, fields: dict[str, str]) -> JobMessage:
+        return JobMessage.parse(fields)
 
-    def stop(self) -> None:
-        self._stop.set()
+    def is_cancelled(self, job: JobMessage) -> bool:
+        return bool(self.client.exists(messages.cancelled_key(job.job_id)))
 
-    @property
-    def stopping(self) -> bool:
-        return self._stop.is_set()
+    def describe(self, job: JobMessage) -> dict[str, Any]:
+        return {"modelCode": job.model_code}
 
-    def run(self) -> None:
-        """Main loop: own pending entries first, then new ones, until stop() is called."""
-        needs_group = needs_drain = True
-        while not self._stop.is_set():
-            try:
-                if needs_group:  # Redis may still be starting (compose)
-                    self.ensure_group()
-                    needs_group = False
-                if needs_drain:
-                    # Also after a Redis outage: a job whose result could not be written is
-                    # still in this consumer's PEL and must be retried before taking new work.
-                    self.drain_pending()
-                    needs_drain = False
-                self.poll_once()
-            except (redis.ConnectionError, redis.TimeoutError) as exc:
-                log.warning("redis unavailable, retrying: %s", exc)
-                needs_drain = True
-                self._stop.wait(2.0)
+    def summarize(self, payload: dict[str, Any]) -> dict[str, Any]:
+        artifacts = payload["artifacts"]
+        return {
+            "inferenceMs": payload["inferenceMs"],
+            "findings": len(payload["findings"]),
+            "heatmaps": len(artifacts["heatmaps"]),
+            "meshes": len(artifacts.get("meshes", [])),
+        }
 
-    def drain_pending(self) -> int:
-        """Re-process entries delivered to this consumer before a crash/restart."""
-        handled = 0
-        while not self._stop.is_set():
-            batch = self._read(start_id="0", block=None, count=10)
-            if not batch:
-                break
-            for entry_id, fields in batch:
-                self.handle(entry_id, fields)
-                handled += 1
-        if handled:
-            log.info("processed pending entries", extra={"count": handled})
-        return handled
+    def execute(self, job: JobMessage, progress: ProgressCallback) -> dict[str, Any]:
+        pipeline = self.registry.get(job.model_code)
+        if isinstance(pipeline, FilePipeline):
+            with tempfile.TemporaryDirectory(prefix="job-") as tmp:
+                workdir = Path(tmp)
+                input_path = workdir / _input_name(job.input_uri)
+                self.storage.download_file(job.input_uri, input_path)
+                progress(PROGRESS_LOADED)
+                t0 = time.perf_counter()
+                output = pipeline.run_file(input_path, job.params, progress, workdir)
+                inference_ms = round((time.perf_counter() - t0) * 1000)
+                progress(PROGRESS_UPLOAD)
+                return self.upload_artifacts(job, output, inference_ms)
 
-    def poll_once(self) -> bool:
-        """Read and process at most one new job. Returns True if a job was handled."""
-        batch = self._read(start_id=">", block=self.block_ms, count=1)
-        for entry_id, fields in batch:
-            self.handle(entry_id, fields)
-        return bool(batch)
-
-    def _read(self, start_id: str, block: int | None, count: int) -> list[tuple[str, Any]]:
-        response = self.client.xreadgroup(
-            CONSUMER_GROUP, self.worker_id, {self.stream: start_id}, count=count, block=block
-        )
-        if not response:
-            return []
-        # RESP2 shape (redis-py default): [[stream, [(id, fields), ...]]]
-        entries = response[0][1]
-        return [(entry_id, fields) for entry_id, fields in entries]
-
-    # ------------------------------------------------------------------ redis helpers
-    def emit(self, fields: dict[str, str]) -> None:
-        self.client.xadd(RESULTS_STREAM, fields)
-
-    def ack(self, entry_id: str) -> None:
-        self.client.xack(self.stream, CONSUMER_GROUP, entry_id)
-
-    def is_cancelled(self, job_id: str) -> bool:
-        return bool(self.client.exists(messages.cancelled_key(job_id)))
-
-    def raise_if_cancelled(self, job_id: str) -> None:
-        if self.is_cancelled(job_id):
-            raise JobCancelled(job_id)
-
-    # ------------------------------------------------------------------ job handling
-    def handle(self, entry_id: str, fields: dict[str, str] | None) -> None:
-        if not fields:  # entry was trimmed/deleted while pending
-            log.warning("empty job entry, acking", extra={"entryId": entry_id})
-            self.ack(entry_id)
-            return
-
-        job_id = fields.get("jobId") or None
-        with job_context(job_id):
-            try:
-                job = JobMessage.parse(fields)
-            except InvalidJobError as exc:
-                log.error("invalid job message: %s", exc, extra={"entryId": entry_id})
-                if job_id:
-                    self.emit(
-                        messages.failed(
-                            job_id,
-                            reported_attempt(fields.get("attempt")),
-                            self.worker_id,
-                            str(exc),
-                            retryable=False,
-                        )
-                    )
-                self.ack(entry_id)
-                return
-            self.process(entry_id, job)
-
-    def process(self, entry_id: str, job: JobMessage) -> None:
-        if self.is_cancelled(job.job_id):
-            log.info("job cancelled before start, skipping")
-            self.ack(entry_id)
-            return
-
-        progress = _Progress(self, job)
-        started_at = time.monotonic()
-        log.info(
-            "job started",
-            extra={"modelCode": job.model_code, "attempt": job.attempt, "entryId": entry_id},
-        )
-        self.emit(messages.started(job.job_id, job.attempt, self.worker_id))
-        try:
-            pipeline = self.registry.get(job.model_code)
-            image_bytes = self.storage.get_bytes(job.input_uri)
-            progress(PROGRESS_LOADED)
-
-            t0 = time.perf_counter()
-            output = pipeline.run(image_bytes, job.params, progress)
-            inference_ms = round((time.perf_counter() - t0) * 1000)
-
-            progress(PROGRESS_UPLOAD)
-            payload = self.upload_artifacts(job, output, inference_ms)
-            self.raise_if_cancelled(job.job_id)
-        except JobCancelled:
-            log.info("job cancelled while running, acking without result")
-            self.ack(entry_id)
-            return
-        except Exception as exc:
-            error, retryable = classify(exc)
-            log.error(
-                "job failed: %s",
-                error,
-                exc_info=not isinstance(exc, JobError),  # traceback only for unexpected errors
-                extra={"retryable": retryable},
-            )
-            self.emit(
-                messages.failed(
-                    job.job_id, job.attempt, self.worker_id, error, retryable, progress.last
-                )
-            )
-            self.ack(entry_id)
-            return
-
-        self.emit(messages.done(job.job_id, job.attempt, self.worker_id, payload))
-        self.ack(entry_id)
-        log.info(
-            "job done",
-            extra={
-                "inferenceMs": payload["inferenceMs"],
-                "totalMs": int((time.monotonic() - started_at) * 1000),
-                "findings": len(payload["findings"]),
-                "heatmaps": len(payload["artifacts"]["heatmaps"]),
-            },
-        )
+        image_bytes = self.storage.get_bytes(job.input_uri)
+        progress(PROGRESS_LOADED)
+        t0 = time.perf_counter()
+        output = pipeline.run(image_bytes, job.params, progress)
+        inference_ms = round((time.perf_counter() - t0) * 1000)
+        progress(PROGRESS_UPLOAD)
+        return self.upload_artifacts(job, output, inference_ms)
 
     def upload_artifacts(
         self, job: JobMessage, output: PipelineOutput, inference_ms: int
@@ -259,18 +103,34 @@ class JobConsumer:
             uri = job.artifact_uri(f"heatmap-{sanitize_label(label)}.png")
             heatmap_uris[label] = self.storage.put_bytes(uri, png, HEATMAP_CONTENT_TYPE)
 
+        artifacts: dict[str, Any] = {"heatmaps": heatmap_uris}
+        if output.segmentation is not None:
+            artifacts["segmentation"] = self.storage.put_file(
+                job.artifact_uri("segmentation.nii.gz"),
+                output.segmentation,
+                SEGMENTATION_CONTENT_TYPE,
+            )
+            artifacts["meshes"] = [
+                {
+                    "label": mesh.label,
+                    "color": mesh.color,
+                    "uri": self.storage.put_file(
+                        job.artifact_uri(f"meshes/{sanitize_label(mesh.label)}.glb"),
+                        mesh.path,
+                        MESH_CONTENT_TYPE,
+                    ),
+                    "triangles": mesh.triangles,
+                    "volumeMl": mesh.volume_ml,
+                    "centroid": list(mesh.centroid),
+                }
+                for mesh in output.meshes
+            ]
+
         payload: dict[str, Any] = {
             "modelVersion": output.model_version,
             "inferenceMs": inference_ms,
-            "findings": [
-                {
-                    "label": f.label,
-                    "confidence": round(min(1.0, max(0.0, float(f.confidence))), 4),
-                    "bbox": f.bbox,
-                }
-                for f in output.findings
-            ],
-            "artifacts": {"heatmaps": heatmap_uris},
+            "findings": [_finding(f) for f in output.findings],
+            "artifacts": artifacts,
         }
         self.storage.put_bytes(
             job.artifact_uri("result.json"),
@@ -278,3 +138,41 @@ class JobConsumer:
             RESULT_CONTENT_TYPE,
         )
         return payload
+
+
+def _finding(f: Finding) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "label": f.label,
+        "confidence": None
+        if f.confidence is None
+        else round(min(1.0, max(0.0, float(f.confidence))), 4),
+    }
+    if f.volume_ml is not None:
+        out["volumeMl"] = f.volume_ml
+    out["bbox"] = f.bbox
+    return out
+
+
+class JobConsumer(StreamConsumer[JobMessage]):
+    """The AI worker's consumer: `StreamConsumer` bound to `AiJobWorkload`."""
+
+    def __init__(
+        self,
+        client: redis.Redis,
+        storage: ObjectStorage,
+        registry: PipelineRegistry,
+        kind: str,
+        worker_id: str,
+        block_ms: int = BLOCK_MS,
+    ) -> None:
+        self.ai_workload = AiJobWorkload(client, storage, registry, kind)
+        super().__init__(client, self.ai_workload, worker_id, block_ms)
+        self.kind = kind
+
+    @property
+    def storage(self) -> ObjectStorage:
+        return self.ai_workload.storage
+
+    @property
+    def registry(self) -> PipelineRegistry:
+        return self.ai_workload.registry

@@ -113,3 +113,35 @@ def test_key_and_stream_names():
     assert messages.CONSUMER_GROUP == "ai-workers"
     assert messages.heartbeat_key("cpu", "w1") == "ai:worker:cpu:w1"
     assert messages.cancelled_key("j1") == "ai:job:j1:cancelled"
+
+
+def test_imaging_results_use_upload_id():
+    started = messages.IMAGING_RESULTS.started("u1", 2, "w")
+    assert started == {
+        "uploadId": "u1",
+        "attempt": "2",
+        "workerId": "w",
+        "type": "STARTED",
+        "progress": "0",
+    }
+    failed = messages.IMAGING_RESULTS.failed("u1", 2, "w", "bad zip", retryable=False, pct=10)
+    assert (failed["uploadId"], failed["retryable"], failed["progress"]) == ("u1", "false", "10")
+    assert messages.IMAGING_RESULTS.stream == "imaging.results"
+    assert messages.IMAGING_JOBS_STREAM == "imaging.jobs"
+    assert messages.INGEST_CONSUMER_GROUP == "ingest-workers"
+
+
+@pytest.mark.parametrize(
+    "missing", ["uploadId", "attempt", "inputType", "inputUri", "outputPrefix"]
+)
+def test_ingest_job_requires_fields(missing):
+    fields = {
+        "uploadId": "u",
+        "attempt": "1",
+        "inputType": "NIFTI",
+        "inputUri": "s3://b/k",
+        "outputPrefix": "s3://b/p/",
+    }
+    del fields[missing]
+    with pytest.raises(InvalidJobError, match=missing):
+        messages.IngestJob.parse(fields)

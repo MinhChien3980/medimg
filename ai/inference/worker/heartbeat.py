@@ -1,4 +1,5 @@
-"""Worker liveness key used by core-service to route jobs (`ai:worker:{kind}:{workerId}`)."""
+"""Worker liveness key read by core-service: `ai:worker:{kind}:{workerId}` (routes AI jobs to
+the GPU queue when a GPU worker is alive) or `imaging:worker:{workerId}` (ingest)."""
 
 from __future__ import annotations
 
@@ -6,8 +7,6 @@ import logging
 import threading
 
 import redis
-
-from worker.messages import heartbeat_key
 
 log = logging.getLogger(__name__)
 
@@ -19,14 +18,13 @@ class Heartbeat(threading.Thread):
     def __init__(
         self,
         client: redis.Redis,
-        kind: str,
-        worker_id: str,
+        key: str,
         interval: float = HEARTBEAT_INTERVAL_SECONDS,
         ttl: int = HEARTBEAT_TTL_SECONDS,
     ) -> None:
         super().__init__(name="heartbeat", daemon=True)
         self._client = client
-        self.key = heartbeat_key(kind, worker_id)
+        self.key = key
         self._interval = interval
         self._ttl = ttl
         self._stop_event = threading.Event()

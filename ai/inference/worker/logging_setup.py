@@ -1,4 +1,5 @@
-"""Structured JSON logging; every record carries the current jobId when there is one."""
+"""Structured JSON logging; every record carries the id of the job being processed (`jobId` for
+AI jobs, `uploadId` for ingest jobs) when there is one."""
 
 from __future__ import annotations
 
@@ -10,18 +11,18 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
-_job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("job_id", default=None)
+_job: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("job", default=None)
 
 _STD_ATTRS = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime"}
 
 
 @contextmanager
-def job_context(job_id: str | None) -> Iterator[None]:
-    token = _job_id.set(job_id)
+def job_context(job_id: str | None, key: str = "jobId") -> Iterator[None]:
+    token = _job.set((key, job_id) if job_id else None)
     try:
         yield
     finally:
-        _job_id.reset(token)
+        _job.reset(token)
 
 
 class JsonFormatter(logging.Formatter):
@@ -32,9 +33,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        job_id = _job_id.get()
-        if job_id:
-            entry["jobId"] = job_id
+        job = _job.get()
+        if job:
+            entry[job[0]] = job[1]
         for key, value in vars(record).items():
             if key not in _STD_ATTRS and not key.startswith("_"):
                 entry[key] = value

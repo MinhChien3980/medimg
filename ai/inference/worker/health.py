@@ -27,6 +27,14 @@ def health_status(
     }
 
 
+def ingest_health_status(worker_id: str, is_running: Callable[[], bool]) -> dict[str, Any]:
+    return {
+        "status": "UP" if is_running() else "STOPPING",
+        "workerId": worker_id,
+        "role": "ingest",
+    }
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     server: _HealthHttpServer
 

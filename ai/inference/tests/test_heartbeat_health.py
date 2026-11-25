@@ -16,7 +16,7 @@ from worker.pipelines.registry import PipelineRegistry
 
 
 def test_heartbeat_sets_key_with_ttl_and_removes_it_on_stop(redis_client):
-    hb = Heartbeat(redis_client, "cpu", "w1", interval=0.05)
+    hb = Heartbeat(redis_client, "ai:worker:cpu:w1", interval=0.05)
     hb.start()
     deadline = time.monotonic() + 2
     while not redis_client.exists("ai:worker:cpu:w1") and time.monotonic() < deadline:

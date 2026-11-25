@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -62,4 +63,16 @@ class ObjectStorage:
     def put_bytes(self, uri: str, data: bytes, content_type: str) -> str:
         loc = S3Uri.parse(uri)
         self._client.put_object(Bucket=loc.bucket, Key=loc.key, Body=data, ContentType=content_type)
+        return str(loc)
+
+    def download_file(self, uri: str, path: Path) -> None:
+        """Stream an object to a local file (volumes are too large to hold twice in memory)."""
+        loc = S3Uri.parse(uri)
+        self._client.download_file(loc.bucket, loc.key, str(path))
+
+    def put_file(self, uri: str, path: Path, content_type: str) -> str:
+        loc = S3Uri.parse(uri)
+        self._client.upload_file(
+            str(path), loc.bucket, loc.key, ExtraArgs={"ContentType": content_type}
+        )
         return str(loc)

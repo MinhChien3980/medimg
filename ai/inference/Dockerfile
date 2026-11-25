@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# ai-worker (CPU). Multi-arch: python:3.12-slim and the PyTorch CPU index both ship
-# linux/amd64 and linux/arm64 wheels, nothing below is x86-only.
+# One CPU image for both worker roles (WORKER_ROLE=ai | ingest). Multi-arch: python:3.12-slim and
+# the PyTorch CPU index both ship linux/amd64 and linux/arm64 wheels, nothing below is x86-only.
 #
 #   docker build -t medimg-ai-worker:dev .                 # runtime image (default, last stage)
 #   docker build --target test -t medimg-ai-worker:test .  # + pytest/ruff/fakeredis/moto
@@ -12,7 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    TOTALSEG_HOME_DIR=/opt/totalsegmentator \
+    MPLCONFIGDIR=/tmp/matplotlib
 
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin app
 
@@ -33,8 +35,21 @@ EOF
 RUN pip install --index-url https://download.pytorch.org/whl/cpu -r /tmp/req-torch.txt \
     && pip install -r /tmp/req.txt
 
-# Pre-download the TorchXRayVision weights at build time so the container works offline.
-# xrv caches them under ~/.torchxrayvision of the user that runs it.
+# Model weights are downloaded at build time so the container works offline.
+# TotalSegmentator `total` in --fast mode is nnU-Net Dataset 297 (3 mm). `totalseg_download_weights
+# -t total_fast` would also fetch Dataset 298 (6 mm), which only --fastest and ROI cropping use.
+# Usage statistics are switched off; the config stays read-only (root-owned) at runtime.
+RUN python - <<'EOF'
+from totalsegmentator.config import set_config_key, setup_totalseg
+from totalsegmentator.libs import download_pretrained_weights
+
+setup_totalseg()
+set_config_key("send_usage_stats", False)
+set_config_key("statistics_disclaimer_shown", True)
+download_pretrained_weights(297)
+EOF
+
+# xrv caches its weights under ~/.torchxrayvision of the user that runs it.
 USER app
 RUN python -c "import torchxrayvision as xrv; m = xrv.models.DenseNet(weights='densenet121-res224-all'); print('weights ok', len(m.pathologies))"
 USER root

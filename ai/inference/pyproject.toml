@@ -1,7 +1,7 @@
 [project]
 name = "medimg-ai-worker"
 version = "0.1.0"
-description = "AI inference worker for the medical imaging platform (Redis Streams consumer)"
+description = "Imaging and AI worker for the medical imaging platform (Redis Streams consumer)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 # torch/torchvision are installed from the PyTorch CPU index in the Dockerfile
@@ -15,6 +15,16 @@ dependencies = [
     "torch==2.14.1",
     "torchvision==0.29.2",
     "torchxrayvision==1.5.7",
+    # CT volumes: ingest (DICOM/NIfTI -> canonical NIfTI) and segmentation -> meshes
+    "nibabel~=5.5.0",
+    "pydicom~=3.0.2",
+    "SimpleITK~=2.5.8",
+    "scipy~=1.18.1",
+    "scikit-image~=0.26.0",
+    "trimesh~=5.2.2",
+    "fast-simplification~=0.2.0",
+    "TotalSegmentator==2.18.0",
+    "nnunetv2==2.8.1",
 ]
 
 [project.optional-dependencies]
@@ -35,9 +45,13 @@ include = ["worker*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "slow: runs the real TorchXRayVision model (needs pre-downloaded weights)",
+    "slow: runs a real model (TorchXRayVision, TotalSegmentator; needs the weights baked into the image)",
 ]
 addopts = "-ra"
+filterwarnings = [
+    # scikit-image 0.26 marching cubes on NumPy 2.5; harmless, fixed upstream
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning:skimage",
+]
 
 [tool.ruff]
 line-length = 100
