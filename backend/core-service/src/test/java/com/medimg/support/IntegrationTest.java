@@ -1,0 +1,216 @@
+package com.medimg.support;
+
+import static org.awaitility.Awaitility.await;
+
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Stream;
+
+import javax.imageio.ImageIO;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.web.client.RestClient;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.MountableFile;
+
+import com.medimg.prediction.application.JobQueuePort;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * Full-stack integration test base: real PostgreSQL (with the same role script as docker-compose), Redis and
+ * SeaweedFS S3. Containers are started once per JVM and shared by all integration tests.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public abstract class IntegrationTest {
+
+    private static final Path DEPLOY = Path.of("..", "..", "deploy").toAbsolutePath().normalize();
+
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine")
+            .withCopyFileToContainer(MountableFile.forHostPath(DEPLOY.resolve("postgres/init/01-roles.sh"), 0755),
+                    "/docker-entrypoint-initdb.d/01-roles.sh");
+
+    @SuppressWarnings("resource")
+    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+
+    @SuppressWarnings("resource")
+    static final GenericContainer<?> S3 = new GenericContainer<>("chrislusf/seaweedfs:4.54")
+            .withCommand("server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-volume.max=0")
+            .withCopyFileToContainer(MountableFile.forHostPath(DEPLOY.resolve("seaweedfs/s3.json")), "/etc/seaweedfs/s3.json")
+            .withExposedPorts(8333)
+            .waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofMinutes(2)));
+
+    static {
+        POSTGRES.start();
+        REDIS.start();
+        S3.start();
+    }
+
+    @DynamicPropertySource
+    static void properties(DynamicPropertyRegistry r) {
+        r.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        r.add("spring.datasource.username", () -> "medimg_app");
+        r.add("spring.datasource.password", () -> "medimg_app");
+        r.add("spring.flyway.user", () -> "medimg_owner");
+        r.add("spring.flyway.password", () -> "medimg_owner");
+        r.add("spring.data.redis.host", REDIS::getHost);
+        r.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
+        String s3 = "http://" + S3.getHost() + ":" + S3.getMappedPort(8333);
+        r.add("app.storage.endpoint", () -> s3);
+        r.add("app.storage.public-endpoint", () -> s3);
+        r.add("app.ai.retry-backoff", () -> "1s,1s");
+        r.add("app.ai.outbox.poll-interval", () -> "200ms");
+        r.add("app.ai.outbox.publish-backoff", () -> "200ms");
+        r.add("app.ai.outbox.max-publish-backoff", () -> "1s");
+    }
+
+    @LocalServerPort
+    protected int port;
+
+    @Autowired
+    protected ObjectMapper json;
+
+    @Autowired
+    protected StringRedisTemplate redis;
+
+    /** The real Redis adapter; a test can make publishing fail. Stubbing is reset after each test. */
+    @MockitoSpyBean
+    protected JobQueuePort jobQueue;
+
+    protected RestClient http;
+
+    protected final HttpClient raw = HttpClient.newHttpClient();
+
+    @BeforeEach
+    void setUpClient() {
+        http = RestClient.builder()
+                .baseUrl("http://localhost:" + port + "/api/v1")
+                .defaultStatusHandler(HttpStatusCode::isError, (req, res) -> { }) // tests assert on status
+                .build();
+    }
+
+    protected record Response(int status, JsonNode body) {
+    }
+
+    protected Response call(String method, String path, String token, Object body, Map<String, String> headers) {
+        var spec = http.method(HttpMethod.valueOf(method)).uri(path);
+        if (token != null) {
+            spec = spec.header("Authorization", "Bearer " + token);
+        }
+        for (var h : headers.entrySet()) {
+            spec = spec.header(h.getKey(), h.getValue());
+        }
+        if (body != null) {
+            spec = spec.contentType(MediaType.APPLICATION_JSON).body(json.writeValueAsString(body));
+        }
+        return spec.exchange((req, res) -> {
+            byte[] bytes = res.getBody().readAllBytes();
+            return new Response(res.getStatusCode().value(), bytes.length == 0 ? null : json.readTree(bytes));
+        });
+    }
+
+    protected Response get(String path, String token) {
+        return call("GET", path, token, null, Map.of());
+    }
+
+    protected Response post(String path, String token, Object body) {
+        return call("POST", path, token, body, Map.of());
+    }
+
+    protected String login(String username) {
+        Response r = post("/auth/login", null, Map.of("username", username, "password", "Demo@12345"));
+        if (r.status() != 200) {
+            throw new IllegalStateException("login failed: " + r);
+        }
+        return r.body().get("accessToken").asString();
+    }
+
+    protected String createCase(String token) {
+        return post("/patients", token, Map.of()).body().get("id").asString();
+    }
+
+    /** Uploads a generated PNG for the case and waits until it is processed; returns {studyId, seriesId}. */
+    protected String[] uploadStudy(String token, String patientId) throws IOException, InterruptedException {
+        byte[] png = png(300, 300);
+        Response init = post("/uploads/init", token, Map.of("patientId", patientId,
+                "files", List.of(Map.of("name", "c.png", "size", png.length, "contentType", "image/png"))));
+        String uploadId = init.body().get("uploadId").asString();
+        putObject(init.body().get("files").get(0).get("putUrl").asString(), png);
+        post("/uploads/" + uploadId + "/complete", token, null);
+        await().atMost(Duration.ofSeconds(20))
+                .until(() -> "DONE".equals(get("/uploads/" + uploadId, token).body().get("status").asString()));
+        String studyId = get("/uploads/" + uploadId, token).body().get("studyId").asString();
+        return new String[] {studyId, get("/studies/" + studyId, token).body().get("series").get(0).get("id").asString()};
+    }
+
+    protected HttpResponse<String> putObject(String presignedUrl, byte[] content) throws IOException, InterruptedException {
+        return raw.send(HttpRequest.newBuilder(URI.create(presignedUrl)).header("Content-Type", "image/png")
+                .PUT(HttpRequest.BodyPublishers.ofByteArray(content)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** Simulates the ai-worker writing to {@code ai.results}. */
+    protected void workerResult(String jobId, Object attempt, String type, Map<String, String> extra) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("jobId", jobId);
+        fields.put("attempt", attempt.toString());
+        fields.put("workerId", "it-worker");
+        fields.put("type", type);
+        fields.putAll(extra);
+        redis.opsForStream().add("ai.results", fields);
+    }
+
+    /** All messages published for the job, from both job streams. */
+    protected List<Map<String, String>> jobMessages(String jobId) {
+        return Stream.of("ai.jobs.gpu", "ai.jobs.cpu")
+                .flatMap(stream -> redis.<String, String>opsForStream().range(stream, Range.unbounded()).stream())
+                .map(MapRecord::getValue)
+                .filter(fields -> jobId.equals(fields.get("jobId")))
+                .toList();
+    }
+
+    /** Waits until the outbox relay has published the given attempt of the job and returns that message. */
+    protected Map<String, String> awaitJobMessage(String jobId, int attempt) {
+        String expected = Integer.toString(attempt);
+        return await().atMost(Duration.ofSeconds(10)).until(
+                () -> jobMessages(jobId).stream().filter(m -> expected.equals(m.get("attempt"))).findFirst(),
+                Optional::isPresent).orElseThrow();
+    }
+
+    protected static byte[] png(int w, int h) throws IOException {
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_BYTE_GRAY);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                img.getRaster().setSample(x, y, 0, (x + y) % 256);
+            }
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+}

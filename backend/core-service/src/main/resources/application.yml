@@ -1,0 +1,117 @@
+spring:
+  application:
+    name: core-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/medimg}
+    username: ${DB_APP_USER:medimg_app}
+    password: ${DB_APP_PASSWORD:medimg_app}
+    hikari:
+      maximum-pool-size: 15
+  flyway:
+    # Migrations run as the schema owner; the application itself connects as medimg_app (DML only).
+    user: ${DB_OWNER_USER:medimg_owner}
+    password: ${DB_OWNER_PASSWORD:medimg_owner}
+    schemas: medimg
+    default-schema: medimg
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: medimg
+        jdbc.time_zone: UTC
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  servlet:
+    multipart:
+      enabled: false
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  # Tomcat's RemoteIpValve resolves the client address from X-Forwarded-For, trusting only hops that are internal
+  # proxies (loopback and private networks, where the Nginx container runs). Entries a client adds itself are ignored.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      internal-proxies: 127.0.0.0/8, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+app:
+  security:
+    jwt:
+      issuer: medimg-core
+      access-token-ttl: 15m
+      refresh-token-ttl: 7d
+      # PEM files; when empty a throwaway RSA key pair is generated at startup (tokens die on restart).
+      private-key-location: ${JWT_PRIVATE_KEY:}
+      public-key-location: ${JWT_PUBLIC_KEY:}
+    cors:
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  demo:
+    seed-users: ${DEMO_SEED_USERS:true}
+    password: ${DEMO_PASSWORD:Demo@12345}
+  storage:
+    bucket: ${S3_BUCKET:medimg}
+    endpoint: ${S3_ENDPOINT:http://localhost:8333}
+    # Origin the browser uses; presigned URLs are signed for its host. The Vite dev server and the Nginx container
+    # proxy /medimg/** to SeaweedFS with the Host header preserved, so the signature still matches.
+    public-endpoint: ${S3_PUBLIC_ENDPOINT:http://localhost:5173}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY:medimg}
+    secret-key: ${S3_SECRET_KEY:medimg-dev-secret}
+    presign-ttl: 15m
+  imaging:
+    max-upload-bytes: 52428800
+    min-image-dimension: 256
+    processing-timeout: 10m
+  ai:
+    max-attempts: 3
+    retry-backoff: 30s,2m
+    timeout-2d: 2m
+    timeout-3d: 20m
+    queued-timeout: 30m
+    sse-heartbeat: 15s
+    sse-timeout: 30m
+    # Job dispatches are written to the outbox_message table with the job and relayed to the Redis job streams.
+    outbox:
+      poll-interval: 1s
+      batch-size: 50
+      publish-backoff: 5s
+      max-publish-backoff: 5m
+      retention: 7d
+    result-stream:
+      consumer-name: ${HOSTNAME:core-1}
+      max-deliveries: 5
+      reclaim-idle: 30s
+      reclaim-interval: 15s
+
+logging:
+  level:
+    com.medimg: INFO
