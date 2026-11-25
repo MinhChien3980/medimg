@@ -1,5 +1,5 @@
 # Local stack.
-#   docker compose -f deploy/docker-compose.yml up -d                     → infra + ai-worker (core-service and frontend run on the host)
+#   docker compose -f deploy/docker-compose.yml up -d                     → infra + ai-worker + ingest-worker (core-service and frontend run on the host)
 #   docker compose -f deploy/docker-compose.yml --profile full up --build → everything, UI on http://localhost:8088
 name: medimg
 
@@ -44,20 +44,43 @@ services:
       - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     deploy: { resources: { limits: { memory: 512m } } }
 
+  # One image, two roles (WORKER_ROLE): model inference (ai.jobs.cpu) and CT ingest (imaging.jobs).
   ai-worker:
     build: ../ai/inference
     image: medimg-ai-worker:dev
-    environment:
+    environment: &worker-env
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://seaweedfs:8333
       S3_ACCESS_KEY: medimg
       S3_SECRET_KEY: ${S3_SECRET_KEY:-medimg-dev-secret}
+      WORKER_ROLE: ai
       WORKER_KIND: cpu
-    depends_on:
+      OMP_NUM_THREADS: "3"
+    depends_on: &worker-deps
       redis: { condition: service_healthy }
       seaweedfs: { condition: service_started }
     restart: unless-stopped
-    deploy: { resources: { limits: { memory: 4g, cpus: "2.0" } } }
+    # Measured peak with TotalSegmentator --fast on CPU: 5.1 GB for a 47 x 47 x 65 cm field of
+    # view (larger ones are refused, see SEG_MAX_GRID_VOXELS), ~3 min; a torso takes 35-80 s.
+    deploy: { resources: { limits: { memory: 6g, cpus: "3.0" } } }
+
+  ingest-worker:
+    build: ../ai/inference
+    image: medimg-ai-worker:dev
+    environment:
+      <<: *worker-env
+      WORKER_ROLE: ingest
+      OMP_NUM_THREADS: "2"
+    depends_on: *worker-deps
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    # 0.2 GB for a 42 M-voxel CT; the 2 GB cap covers the 300 M-voxel limit (int16 copies).
+    deploy: { resources: { limits: { memory: 2g, cpus: "2.0" } } }
 
   core-service:
     profiles: ["full"]

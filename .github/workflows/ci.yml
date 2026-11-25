@@ -23,6 +23,7 @@ jobs:
       backend: ${{ github.event_name == 'push' || steps.filter.outputs.backend == 'true' }}
       ai-worker: ${{ github.event_name == 'push' || steps.filter.outputs.ai-worker == 'true' }}
       frontend: ${{ github.event_name == 'push' || steps.filter.outputs.frontend == 'true' }}
+      tools: ${{ github.event_name == 'push' || steps.filter.outputs.tools == 'true' }}
     steps:
       - uses: dorny/paths-filter@v4
         id: filter
@@ -37,6 +38,9 @@ jobs:
               - .github/workflows/ci.yml
             frontend:
               - frontend/**
+              - .github/workflows/ci.yml
+            tools:
+              - tools/**
               - .github/workflows/ci.yml
 
   backend:
@@ -68,6 +72,12 @@ jobs:
     if: needs.changes.outputs.ai-worker == 'true'
     runs-on: ubuntu-latest
     steps:
+      # The image is ~4 GB (PyTorch CPU, TotalSegmentator + nnU-Net, model weights); building and
+      # loading it needs more than the runner's default free disk space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - name: Build test image
@@ -81,10 +91,26 @@ jobs:
           cache-to: type=gha,scope=ai-worker,mode=max
       - name: Lint and fast tests
         if: github.event_name == 'pull_request'
-        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && python -m pytest -q -m 'not slow'"
-      - name: Lint and all tests, including the real model
+        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && ruff format --check . && python -m pytest -q -m 'not slow'"
+      - name: Lint and all tests, including the real models
         if: github.event_name == 'push'
-        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && python -m pytest -q"
+        run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && ruff format --check . && python -m pytest -q"
+
+  tools:
+    needs: changes
+    if: needs.changes.outputs.tools == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pipx run ruff==0.17.6 check . && pipx run ruff==0.17.6 format --check .
+      - name: Unit tests (standard library only)
+        run: python -m unittest discover -s tests -v
 
   frontend:
     needs: changes
