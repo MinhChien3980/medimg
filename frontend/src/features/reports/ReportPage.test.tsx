@@ -26,6 +26,7 @@ import {
 import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
 import ReportPage from './ReportPage';
+import { findModal } from '@/test/modal';
 
 interface Calls {
   created: CreateReportRequest[];
@@ -267,7 +268,7 @@ describe('ReportPage', () => {
       await user.type(screen.getByLabelText('Impression'), 'Cardiomegaly.');
       await user.click(sign);
 
-      const dialog = await screen.findByRole('dialog', { name: 'Sign and finalize this report?' });
+      const dialog = await findModal('Sign and finalize this report?');
       expect(calls.updated).toHaveLength(1); // saved before asking
       await user.click(within(dialog).getByRole('button', { name: 'Sign' }));
       await waitFor(() => expect(calls.finalized).toEqual([{ rowVersion: 1 }]));
@@ -292,9 +293,7 @@ describe('ReportPage', () => {
       await user.type(await screen.findByLabelText('Impression'), 'Cardiomegaly.');
       await user.click(screen.getByRole('button', { name: /Refill from reviewed findings/ }));
 
-      const dialog = await screen.findByRole('dialog', {
-        name: 'Replace Technique and Findings?',
-      });
+      const dialog = await findModal('Replace Technique and Findings?');
       expect(calls.updated).toHaveLength(1); // saved before asking
       expect(dialog).toHaveTextContent(
         'The Findings and Technique sections will be replaced with text written from the accepted and edited findings and the annotations as they are now',
@@ -325,9 +324,7 @@ describe('ReportPage', () => {
       await user.click(
         await screen.findByRole('button', { name: /Refill from reviewed findings/ }),
       );
-      const dialog = await screen.findByRole('dialog', {
-        name: 'Replace Technique and Findings?',
-      });
+      const dialog = await findModal('Replace Technique and Findings?');
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
       await new Promise((r) => setTimeout(r, 300));
@@ -343,9 +340,7 @@ describe('ReportPage', () => {
       await user.click(
         await screen.findByRole('button', { name: /Refill from reviewed findings/ }),
       );
-      const dialog = await screen.findByRole('dialog', {
-        name: 'Replace Technique and Findings?',
-      });
+      const dialog = await findModal('Replace Technique and Findings?');
       const readsBefore = calls.details;
       await user.click(within(dialog).getByRole('button', { name: 'Refill' }));
 
@@ -386,9 +381,7 @@ describe('ReportPage', () => {
         await screen.findByText('Findings were reviewed after this draft was last saved'),
       ).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: /Refill from reviewed findings/ }));
-      const dialog = await screen.findByRole('dialog', {
-        name: 'Replace Technique and Findings?',
-      });
+      const dialog = await findModal('Replace Technique and Findings?');
       await user.click(within(dialog).getByRole('button', { name: 'Refill' }));
 
       await waitFor(() =>

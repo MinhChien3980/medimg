@@ -24,6 +24,7 @@ import {
 } from '@/test/fixtures';
 import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
+import { findModal } from '@/test/modal';
 
 const AXIAL = { viewPlaneNormal: [0, 0, -1], viewUp: [0, -1, 0] } as const;
 
@@ -295,7 +296,7 @@ describe('MPR annotations', () => {
     await user.click(screen.getByRole('img', { name: 'Coronal view' }));
     await user.click(await screen.findByRole('button', { name: /Add to report/ }));
     await waitFor(() => expect(engine.captures).toEqual(['coronal']));
-    const dialog = await screen.findByRole('dialog', { name: 'Add a key image to the report' });
+    const dialog = await findModal('Add a key image to the report');
     expect(within(dialog).getByLabelText('Caption')).toHaveValue('CT ABDOMEN – Coronal view');
   });
 });

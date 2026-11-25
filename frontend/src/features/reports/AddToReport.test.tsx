@@ -9,6 +9,7 @@ import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
 import { AddToReportButton } from './AddToReport';
 import { StudyReportStatus } from './StudyReportStatus';
+import { findModal } from '@/test/modal';
 
 const PNG = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
 const capture = () => Promise.resolve(PNG);
@@ -79,7 +80,7 @@ describe('AddToReportButton', () => {
     renderButton();
 
     await user.click(screen.getByRole('button', { name: /Add to report/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Add a key image to the report' });
+    const dialog = await findModal('Add a key image to the report');
     expect(within(dialog).getByRole('img', { name: 'Captured view' })).toBeInTheDocument();
     const caption = within(dialog).getByLabelText('Caption');
     expect(caption).toHaveValue('CR CHEST');

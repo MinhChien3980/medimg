@@ -23,6 +23,7 @@ import {
 } from '@/test/fixtures';
 import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
+import { findModal } from '@/test/modal';
 
 /** jsdom never decodes images: this one "loads" a 1000×800 picture. */
 class LoadedImage {
@@ -120,12 +121,24 @@ function serve(s: StudyDto, annotations: AnnotationDto[], { conflict = false } =
   return rec;
 }
 
+/**
+ * Opens the viewer. `layer()` and `background()` look the elements up on every call: the layer
+ * re-renders with the viewport, so a reference kept across awaits can point at a stale node.
+ */
 async function open(s: StudyDto, user: UserDto = doctor) {
   useAuthStore.getState().setSession(tokens('acc', 'ref', user));
   renderWithProviders(<ViewerPage />, { route: `/studies/${s.id}`, path: '/studies/:studyId' });
-  const layer = await screen.findByTestId('annotation-layer');
-  const background = layer.querySelector('.annotation-layer__background') as Element;
+  await screen.findByTestId('annotation-layer');
+  const layer = () => screen.getByTestId('annotation-layer');
+  const background = () => layer().querySelector('.annotation-layer__background') as Element;
   return { layer, background };
+}
+
+/** Picks a drawing tool and waits until it is active, so the next pointer events draw with it. */
+async function pickTool(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const button = screen.getByRole('button', { name });
+  await user.click(button);
+  await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'true'));
 }
 
 const openAnnotationsTab = async (user: ReturnType<typeof userEvent.setup>) =>
@@ -148,10 +161,10 @@ describe('2D annotations in the viewer', () => {
     const { layer, background } = await open(study);
 
     expect(screen.getByTestId('pixel-spacing')).toHaveTextContent('Measured in px');
-    await user.click(screen.getByRole('button', { name: 'Draw a rectangle' }));
-    fireEvent.pointerDown(background, { ...at(100, 100), button: 0 });
-    fireEvent.pointerMove(layer, at(300, 250));
-    fireEvent.pointerUp(layer, at(300, 250));
+    await pickTool(user, 'Draw a rectangle');
+    fireEvent.pointerDown(background(), { ...at(100, 100), button: 0 });
+    fireEvent.pointerMove(layer(), at(300, 250));
+    fireEvent.pointerUp(layer(), at(300, 250));
 
     await waitFor(() => expect(rec.created).toHaveLength(1));
     expect(rec.created[0]).toEqual({
@@ -177,14 +190,14 @@ describe('2D annotations in the viewer', () => {
     const { layer, background } = await open(calibrated);
 
     expect(screen.getByTestId('pixel-spacing')).toHaveTextContent('0.200 × 0.200 mm');
-    await user.click(screen.getByRole('button', { name: 'Measure a length' }));
-    fireEvent.pointerDown(background, { ...at(100, 100), button: 0 });
-    fireEvent.pointerUp(layer, at(400, 500));
+    await pickTool(user, 'Measure a length');
+    fireEvent.pointerDown(background(), { ...at(100, 100), button: 0 });
+    fireEvent.pointerUp(layer(), at(400, 500));
 
     await waitFor(() => expect(rec.created).toHaveLength(1));
     expect(rec.created[0]?.geometry).toEqual({ from: [100, 100], to: [400, 500] });
     expect(rec.created[0]?.measurement).toEqual({ lengthMm: 100 });
-    expect(await within(layer).findByText('100.0 mm')).toBeInTheDocument();
+    expect(await within(layer()).findByText('100.0 mm')).toBeInTheDocument();
   });
 
   it('asks for the text of an arrow before saving it', async () => {
@@ -192,10 +205,10 @@ describe('2D annotations in the viewer', () => {
     const rec = serve(study, []);
     const { layer, background } = await open(study);
 
-    await user.click(screen.getByRole('button', { name: 'Draw an arrow' }));
-    fireEvent.pointerDown(background, { ...at(50, 50), button: 0 });
-    fireEvent.pointerUp(layer, at(200, 120));
-    const dialog = await screen.findByRole('dialog', { name: 'Arrow text' });
+    await pickTool(user, 'Draw an arrow');
+    fireEvent.pointerDown(background(), { ...at(50, 50), button: 0 });
+    fireEvent.pointerUp(layer(), at(200, 120));
+    const dialog = await findModal('Arrow text');
     await user.type(within(dialog).getByLabelText('Text'), 'Nodule');
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
@@ -213,13 +226,13 @@ describe('2D annotations in the viewer', () => {
     const { layer } = await open(study);
 
     const hit = await waitFor(() => {
-      const el = layer.querySelector('[data-annotation-id="ann-1"] .annotation-shape__hit');
+      const el = layer().querySelector('[data-annotation-id="ann-1"] .annotation-shape__hit');
       if (!el) throw new Error('not drawn yet');
       return el;
     });
     fireEvent.pointerDown(hit, { ...at(100, 150), button: 0 });
-    fireEvent.pointerMove(layer, at(110, 170));
-    fireEvent.pointerUp(layer, at(110, 170));
+    fireEvent.pointerMove(layer(), at(110, 170));
+    fireEvent.pointerUp(layer(), at(110, 170));
 
     await waitFor(() => expect(rec.updated).toHaveLength(1));
     expect(rec.updated[0]).toEqual({
@@ -246,7 +259,7 @@ describe('2D annotations in the viewer', () => {
     await openAnnotationsTab(user);
 
     await user.click(await screen.findByRole('button', { name: 'Edit Nodule' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Annotation' });
+    const dialog = await findModal('Annotation');
     const label = within(dialog).getByLabelText('Label');
     await user.clear(label);
     await user.type(label, 'Nodule, right upper zone');
@@ -274,12 +287,12 @@ describe('2D annotations in the viewer', () => {
     await screen.findByRole('button', { name: 'Edit Nodule' });
     const listsBefore = rec.lists;
 
-    const hit = layer.querySelector(
+    const hit = layer().querySelector(
       '[data-annotation-id="ann-1"] .annotation-shape__hit',
     ) as Element;
     fireEvent.pointerDown(hit, { ...at(100, 150), button: 0 });
-    fireEvent.pointerMove(layer, at(150, 150));
-    fireEvent.pointerUp(layer, at(150, 150));
+    fireEvent.pointerMove(layer(), at(150, 150));
+    fireEvent.pointerUp(layer(), at(150, 150));
 
     expect(
       await screen.findByText(
@@ -287,7 +300,7 @@ describe('2D annotations in the viewer', () => {
       ),
     ).toBeInTheDocument();
     await waitFor(() => expect(rec.lists).toBeGreaterThan(listsBefore));
-    const outline = layer.querySelector('[data-annotation-id="ann-1"] path');
+    const outline = layer().querySelector('[data-annotation-id="ann-1"] path');
     expect(outline?.getAttribute('d')?.startsWith(`M${(OFFSET.x + 100 * SCALE).toFixed(1)},`)).toBe(
       true,
     );
