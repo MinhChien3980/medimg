@@ -213,6 +213,16 @@ class S3ObjectStorageAdapter implements ObjectStoragePort {
     }
 
     @Override
+    public void copy(String sourceKey, String targetKey) {
+        try {
+            client.copyObject(b -> b.sourceBucket(props.bucket()).sourceKey(sourceKey)
+                    .destinationBucket(props.bucket()).destinationKey(targetKey));
+        } catch (NoSuchKeyException e) {
+            throw new ObjectNotFoundException(sourceKey);
+        }
+    }
+
+    @Override
     public void delete(String key) {
         client.deleteObject(b -> b.bucket(props.bucket()).key(key));
     }

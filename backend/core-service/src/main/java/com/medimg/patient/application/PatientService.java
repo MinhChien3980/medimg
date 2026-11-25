@@ -36,6 +36,10 @@ public class PatientService {
     public record MarkSample(String title, String description, String source) {
     }
 
+    /** What other modules may show about a case: its pseudonymous code, birth year and sex. */
+    public record CaseRef(UUID id, String code, Short birthYear, String sex) {
+    }
+
     private final PatientRepository patients;
     private final StudyCountPort studyCounts;
     private final Clock clock;
@@ -111,6 +115,13 @@ public class PatientService {
         List<Patient> samples = patients.findSamples();
         Map<UUID, Long> counts = studyCounts.countByPatient(samples.stream().map(Patient::getId).toList());
         return samples.stream().map(p -> toDto(p, counts.getOrDefault(p.getId(), 0L))).toList();
+    }
+
+    /** For other modules, e.g. the header of a report; not audited as a view of the case. */
+    @Transactional(readOnly = true)
+    public CaseRef describe(UUID id) {
+        Patient p = require(id);
+        return new CaseRef(p.getId(), p.getCode(), p.getBirthYear(), p.getSex());
     }
 
     /** Used by other modules (e.g. imaging) to validate a case reference. */

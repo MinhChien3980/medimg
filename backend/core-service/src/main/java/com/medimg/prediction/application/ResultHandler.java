@@ -122,8 +122,8 @@ public class ResultHandler {
                 artifacts.meshes() == null ? null : json.writeValueAsString(artifacts.meshes()), payload.inferenceMs()));
         List<PayloadFinding> list = payload.findings() == null ? List.of() : payload.findings();
         findings.saveAll(list.stream()
-                .map(f -> new Finding(result.getId(), f.label(), f.confidence(), f.volumeMl(),
-                        f.bbox() == null ? null : json.writeValueAsString(f.bbox())))
+                .map(f -> Finding.ai(result.getId(), job.getStudyId(), job.getSeriesId(), f.label(), f.confidence(),
+                        f.volumeMl(), f.bbox() == null ? null : json.writeValueAsString(f.bbox())))
                 .toList());
         job.complete(now);
         log.info("Job {} done: {} findings, {} ms", job.getId(), list.size(), payload.inferenceMs());

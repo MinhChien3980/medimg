@@ -46,7 +46,7 @@ public class Series {
     @Column(name = "thumbnail_uri")
     private String thumbnailKey;
 
-    /** Voxel spacing in mm, volumes only. */
+    /** Spacing in mm: x, y and z for a volume, x and y for a calibrated 2D image (a DICOM X-ray), else none. */
     @Column(name = "spacing_x")
     private Double spacingX;
 
@@ -87,12 +87,28 @@ public class Series {
         return s;
     }
 
+    /** A 2D image; {@code pixelSpacing} ({@code [x, y]} mm) is null when the image is not calibrated (PNG, JPEG). */
+    public static Series image(UUID id, UUID studyId, String modality, int width, int height, List<Double> pixelSpacing,
+                               String imageKey, String thumbnailKey, Instant now) {
+        Series s = new Series(id, studyId, modality, 1, height, width, imageKey, thumbnailKey, now);
+        if (pixelSpacing != null) {
+            s.spacingX = pixelSpacing.get(0);
+            s.spacingY = pixelSpacing.get(1);
+        }
+        return s;
+    }
+
     public List<Integer> dims() {
         return List.of(cols, rows, numImages);
     }
 
-    /** Null for 2D images. */
+    /** Voxel spacing {@code [x, y, z]} of a volume; null for 2D images. */
     public List<Double> spacing() {
-        return spacingX == null ? null : List.of(spacingX, spacingY, spacingZ);
+        return spacingZ == null ? null : List.of(spacingX, spacingY, spacingZ);
+    }
+
+    /** Pixel spacing {@code [x, y]} of a calibrated 2D image; null for volumes and uncalibrated images. */
+    public List<Double> pixelSpacing() {
+        return spacingX == null || spacingZ != null ? null : List.of(spacingX, spacingY);
     }
 }

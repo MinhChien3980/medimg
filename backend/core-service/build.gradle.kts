@@ -21,6 +21,7 @@ repositories {
 val awsSdkVersion = "2.59.8"
 val springdocVersion = "3.2.1"
 val archunitVersion = "1.5.1"
+val openHtmlToPdfVersion = "1.1.117"
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
@@ -38,6 +39,10 @@ dependencies {
     implementation(platform("software.amazon.awssdk:bom:$awsSdkVersion"))
     implementation("software.amazon.awssdk:s3")
     implementation("software.amazon.awssdk:url-connection-client")
+
+    // Report PDFs: HTML template (Thymeleaf, version from the Spring Boot BOM) rendered by openhtmltopdf (Apache PDFBox 3)
+    implementation("org.thymeleaf:thymeleaf")
+    implementation("io.github.openhtmltopdf:openhtmltopdf-pdfbox:$openHtmlToPdfVersion")
 
     compileOnly("org.projectlombok:lombok")
     runtimeOnly("org.postgresql:postgresql")

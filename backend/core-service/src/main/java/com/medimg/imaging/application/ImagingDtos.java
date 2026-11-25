@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import com.medimg.imaging.domain.Study;
 import com.medimg.shared.storage.ObjectStoragePort.UploadedPart;
 
 /** Public contract of the imaging module (REST DTOs and data handed to other modules). */
@@ -47,13 +48,14 @@ public final class ImagingDtos {
     }
 
     /**
-     * {@code imageUrl} is set for a 2D image, {@code volumeUrl} (NIfTI), {@code dims} ({@code [x, y, z]} voxels) and
-     * {@code spacing} ({@code [x, y, z]} mm) for a volume. {@code spacingAssumed} is true when the spacing of a stack
-     * of 2D images was not given (1 mm assumed, so measurements are not reliable).
+     * {@code imageUrl} is set for a 2D image, with {@code pixelSpacing} ({@code [x, y]} mm) when the image is calibrated
+     * (a DICOM X-ray; null for PNG and JPEG, measured in pixels); {@code volumeUrl} (NIfTI), {@code dims}
+     * ({@code [x, y, z]} voxels) and {@code spacing} ({@code [x, y, z]} mm) for a volume. {@code spacingAssumed} is true
+     * when the spacing of a stack of 2D images was not given (1 mm assumed, so measurements are not reliable).
      */
     public record SeriesDto(UUID id, String modality, Integer rows, Integer cols, Integer numImages,
                             URI imageUrl, URI thumbnailUrl, URI volumeUrl, List<Integer> dims, List<Double> spacing,
-                            boolean spacingAssumed) {
+                            boolean spacingAssumed, List<Double> pixelSpacing) {
     }
 
     public record StudyDto(UUID id, UUID patientId, String inputType, String modality, String bodyPart,
@@ -61,10 +63,26 @@ public final class ImagingDtos {
     }
 
     /**
-     * What the prediction module needs to schedule a job on a series. {@code inputType} is that of the study;
-     * {@code normalizedUri} is the stored image or volume a worker reads, in format {@code normalizedType}.
+     * A series as other modules see it. {@code inputType} is that of the study; {@code normalizedUri} is the stored
+     * image or volume a worker reads, in format {@code normalizedType}. {@code dims} is {@code [x, y, z]} ({@code z} is
+     * 1 for a 2D image); {@code spacing} is in mm, {@code [x, y, z]} for a volume, {@code [x, y]} for a calibrated 2D
+     * image and null for an uncalibrated one.
      */
     public record SeriesRef(UUID studyId, UUID seriesId, UUID patientId, String inputType, String modality,
-                            String bodyPart, String normalizedType, String normalizedUri) {
+                            String bodyPart, String normalizedType, String normalizedUri, List<Integer> dims,
+                            List<Double> spacing) {
+
+        public boolean isVolume() {
+            return Study.InputType.valueOf(normalizedType).isVolume();
+        }
+    }
+
+    /** A study and its series, without the URLs of their files. */
+    public record StudyRef(UUID id, UUID patientId, String inputType, String modality, String bodyPart,
+                           Instant createdAt, List<SeriesRef> series) {
+
+        public boolean isVolume() {
+            return Study.InputType.valueOf(inputType).isVolume();
+        }
     }
 }

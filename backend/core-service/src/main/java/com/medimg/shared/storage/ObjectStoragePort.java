@@ -47,6 +47,9 @@ public interface ObjectStoragePort {
 
     long size(String key);
 
+    /** Server-side copy of an object to another key of the bucket. */
+    void copy(String sourceKey, String targetKey);
+
     void delete(String key);
 
     /** {@code s3://bucket/key} */

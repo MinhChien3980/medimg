@@ -211,6 +211,38 @@ public abstract class IntegrationTest {
         return new String[] {studyId, get("/studies/" + studyId, token).body().get("series").get(0).get("id").asString()};
     }
 
+    /**
+     * Uploads a DICOM X-ray and plays the ingest worker until the upload is DONE: a 2048 x 2500 px image with a pixel
+     * spacing of {@code pixelSpacingMm} in x and y. Returns {studyId, seriesId}.
+     */
+    protected String[] uploadDicomXray(String token, String patientId, double pixelSpacingMm)
+            throws IOException, InterruptedException {
+        String uploadId = startVolumeUpload(token, patientId, "cxr.dcm", TestFiles.dicom(), "application/dicom")
+                .get("uploadId").asString();
+        String prefix = awaitIngestMessage(uploadId, 1).get("outputPrefix");
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", """
+                {"inputType":"DICOM_2D","imageUri":"%1$simage.png","thumbnailUri":"%1$sthumb.png","modality":"DX",
+                 "dims":[2048,2500,1],"spacing":[%2$s,%2$s,null]}
+                """.formatted(prefix, pixelSpacingMm)));
+        await().atMost(Duration.ofSeconds(10))
+                .until(() -> "DONE".equals(get("/uploads/" + uploadId, token).body().get("status").asString()));
+        String studyId = get("/uploads/" + uploadId, token).body().get("studyId").asString();
+        return new String[] {studyId, get("/studies/" + studyId, token).body().get("series").get(0).get("id").asString()};
+    }
+
+    /**
+     * Runs a prediction of {@code modelCode} on the series and plays the worker until it is DONE with the given
+     * findings (a JSON array of the worker payload); returns the job id.
+     */
+    protected String completedPrediction(String token, String[] study, String modelCode, String findingsJson) {
+        String jobId = post("/predictions", token, Map.of("studyId", study[0], "seriesId", study[1], "modelCode", modelCode))
+                .body().get("jobId").asString();
+        workerResult(jobId, 1, "DONE", Map.of("payload", "{\"inferenceMs\":100,\"findings\":" + findingsJson + "}"));
+        await().atMost(Duration.ofSeconds(10))
+                .until(() -> "DONE".equals(get("/predictions/" + jobId, token).body().get("status").asString()));
+        return jobId;
+    }
+
     /** DONE payload of the ingest worker for a volume of {@code inputType} written under {@code outputPrefix}. */
     protected static String volumePayload(String outputPrefix, String inputType) {
         return """

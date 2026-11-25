@@ -1,0 +1,204 @@
+/* Layout of the report PDF (openhtmltopdf: CSS 2.1 plus paged media). */
+
+@page {
+    size: A4;
+    margin: 24mm 16mm 20mm 16mm;
+
+    @top-center {
+        content: element(header);
+    }
+
+    @bottom-center {
+        content: element(footer);
+    }
+}
+
+body {
+    font-family: 'Noto Sans', sans-serif;
+    font-size: 9.5pt;
+    line-height: 1.4;
+    color: #1d2430;
+}
+
+/* Header and footer: two cells, left and right aligned. */
+.page-header,
+.page-footer {
+    display: table;
+    width: 100%;
+}
+
+.page-header {
+    position: running(header);
+    padding-bottom: 1.5mm;
+    border-bottom: 0.6pt solid #9aa5b5;
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+.page-footer {
+    position: running(footer);
+    font-size: 7.5pt;
+    color: #5b6576;
+}
+
+.page-header span,
+.page-footer > span {
+    display: table-cell;
+}
+
+.page-header .platform {
+    color: #0b5394;
+}
+
+.page-header .banner {
+    text-align: right;
+    color: #b3261e;
+}
+
+.page-footer .page-number {
+    text-align: right;
+}
+
+.page::after {
+    content: counter(page);
+}
+
+.pages::after {
+    content: counter(pages);
+}
+
+/* Repeated on every page of a draft. */
+.watermark {
+    position: fixed;
+    top: 95mm;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 44pt;
+    font-weight: 700;
+    color: #b3261e;
+    white-space: nowrap;
+    opacity: 0.15;
+    transform: rotate(-30deg);
+}
+
+h1 {
+    font-size: 16pt;
+    margin: 0;
+    color: #0b5394;
+}
+
+h2 {
+    font-size: 11pt;
+    margin: 0 0 1.5mm 0;
+    padding-bottom: 0.8mm;
+    border-bottom: 0.4pt solid #d5dbe4;
+    page-break-after: avoid;
+}
+
+.version,
+.amendment {
+    margin: 0.5mm 0 0 0;
+    color: #5b6576;
+}
+
+.amendment {
+    font-weight: 700;
+    color: #b3261e;
+}
+
+.section {
+    margin-top: 5mm;
+}
+
+.text {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.empty {
+    margin: 0;
+    font-style: italic;
+    color: #5b6576;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.facts {
+    margin-top: 4mm;
+}
+
+.facts th,
+.facts td,
+.signature th,
+.signature td {
+    padding: 1.2mm 2mm;
+    border: 0.4pt solid #d5dbe4;
+    text-align: left;
+    vertical-align: top;
+}
+
+.facts th,
+.signature th {
+    width: 1%;
+    white-space: nowrap;
+    background-color: #f1f4f8;
+    font-weight: 700;
+}
+
+.findings {
+    -fs-table-paginate: paginate;
+}
+
+.findings th,
+.findings td {
+    padding: 1.2mm 2mm;
+    border-bottom: 0.4pt solid #d5dbe4;
+    text-align: left;
+    vertical-align: top;
+}
+
+.findings thead th {
+    background-color: #f1f4f8;
+    font-weight: 700;
+}
+
+.findings tr {
+    page-break-inside: avoid;
+}
+
+.findings .number {
+    white-space: nowrap;
+}
+
+.figure {
+    display: inline-block;
+    width: 48%;
+    margin: 0 1.5% 4mm 0;
+    vertical-align: top;
+    page-break-inside: avoid;
+}
+
+.figure img {
+    width: 100%;
+    border: 0.4pt solid #9aa5b5;
+}
+
+.caption {
+    margin: 1mm 0 0 0;
+    font-size: 8.5pt;
+    color: #3c4656;
+}
+
+.impression .text {
+    font-weight: 700;
+}
+
+.signature {
+    margin-top: 8mm;
+    width: 60%;
+    page-break-inside: avoid;
+}

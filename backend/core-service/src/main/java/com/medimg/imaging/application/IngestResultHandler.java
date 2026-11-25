@@ -107,8 +107,8 @@ public class IngestResultHandler {
         series.save(p.inputType().isVolume()
                 ? Series.volume(upload.getReservedSeriesId(), study.getId(), modality, p.dims(), p.spacing(),
                         Boolean.TRUE.equals(p.spacingAssumed()), ingested.imageKey(), ingested.thumbnailKey(), now)
-                : new Series(upload.getReservedSeriesId(), study.getId(), modality, 1, p.dims().get(1), p.dims().get(0),
-                        ingested.imageKey(), ingested.thumbnailKey(), now));
+                : Series.image(upload.getReservedSeriesId(), study.getId(), modality, p.dims().get(0), p.dims().get(1),
+                        ingested.pixelSpacing(), ingested.imageKey(), ingested.thumbnailKey(), now));
         upload.markIngested(p.inputType(), now);
         rawUploads.deleteAfterCommit(rawKey(upload));
         log.info("Upload {} ingested into study {} ({} {})", upload.getId(), study.getId(), p.inputType(), p.dims());
@@ -133,8 +133,8 @@ public class IngestResultHandler {
         }
     }
 
-    /** {@code imageKey} is the normalised image (2D) or volume (3D). */
-    private record Ingested(Payload payload, String imageKey, String thumbnailKey) {
+    /** {@code imageKey} is the normalised image (2D) or volume (3D); {@code pixelSpacing} that of a calibrated 2D image. */
+    private record Ingested(Payload payload, String imageKey, String thumbnailKey, List<Double> pixelSpacing) {
     }
 
     /**
@@ -154,10 +154,10 @@ public class IngestResultHandler {
             if (p.dims().get(2) != 1) {
                 throw new IllegalArgumentException("dims of a 2D image must be [w, h, 1]: " + p.dims());
             }
-            return new Ingested(p, ownKey(upload, p.imageUri()), ownKey(upload, p.thumbnailUri()));
+            return new Ingested(p, ownKey(upload, p.imageUri()), ownKey(upload, p.thumbnailUri()), pixelSpacing(p.spacing()));
         }
-        requireTriple("spacing", p.spacing(), s -> s > 0 && Double.isFinite(s));
-        return new Ingested(p, ownKey(upload, p.volumeUri()), ownKey(upload, p.thumbnailUri()));
+        requireTriple("spacing", p.spacing(), IngestResultHandler::isPositive);
+        return new Ingested(p, ownKey(upload, p.volumeUri()), ownKey(upload, p.thumbnailUri()), null);
     }
 
     private String ownKey(UploadSession upload, String uri) {
@@ -166,6 +166,21 @@ public class IngestResultHandler {
             throw new IllegalArgumentException(uri + " is outside " + upload.outputPrefix());
         }
         return key;
+    }
+
+    /** The spacing of a 2D image is absent (not calibrated) or {@code [x, y, null]}. */
+    private static List<Double> pixelSpacing(List<Double> spacing) {
+        if (spacing == null) {
+            return null;
+        }
+        if (spacing.size() != 3 || spacing.get(2) != null || !isPositive(spacing.get(0)) || !isPositive(spacing.get(1))) {
+            throw new IllegalArgumentException("spacing of a 2D image must be [x, y, null] in mm: " + spacing);
+        }
+        return List.of(spacing.get(0), spacing.get(1));
+    }
+
+    private static boolean isPositive(Double value) {
+        return value != null && value > 0 && Double.isFinite(value);
     }
 
     private static <T> void requireTriple(String name, List<T> values, Predicate<T> valid) {

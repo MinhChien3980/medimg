@@ -69,6 +69,6 @@ class SampleServiceTest {
     }
 
     private static SeriesDto series(URI thumbnail) {
-        return new SeriesDto(UUID.randomUUID(), "CT", 512, 512, 100, null, thumbnail, null, null, null, false);
+        return new SeriesDto(UUID.randomUUID(), "CT", 512, 512, 100, null, thumbnail, null, null, null, false, null);
     }
 }

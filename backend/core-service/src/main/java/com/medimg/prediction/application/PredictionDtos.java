@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.medimg.identity.application.UserRef;
+
 public final class PredictionDtos {
 
     private PredictionDtos() {
@@ -18,9 +20,25 @@ public final class PredictionDtos {
     public record ModelRef(String code, String version) {
     }
 
-    /** {@code confidence} is null for segmentation findings, {@code volumeMl} (segmented volume) for 2D ones. */
-    public record FindingDto(UUID id, String label, BigDecimal confidence, BigDecimal volumeMl, List<Double> bbox,
-                             String reviewStatus) {
+    /**
+     * A finding of the AI ({@code source} AI) or added by a doctor (MANUAL). {@code confidence} is null for
+     * segmentation and manual findings, {@code volumeMl} (segmented volume) for 2D and manual ones. {@code review} is
+     * null while the finding is PENDING; a manual finding is ACCEPTED, reviewed by its author, and may point at an
+     * annotation. {@code version} is sent back with a review.
+     */
+    public record FindingDto(UUID id, UUID seriesId, String source, String label, BigDecimal confidence,
+                             BigDecimal volumeMl, List<Double> bbox, String reviewStatus, ReviewDto review,
+                             UUID annotationId, long version) {
+    }
+
+    /** {@code label} is the corrected label of an EDITED finding, null otherwise. */
+    public record ReviewDto(String status, String label, String note, UserRef reviewedBy, Instant reviewedAt) {
+    }
+
+    public record ReviewFinding(String status, String label, String note, long version) {
+    }
+
+    public record AddFinding(UUID studyId, UUID seriesId, String label, String note, UUID annotationId) {
     }
 
     /** One organ surface as GLB; {@code centroid} in patient LPS coordinates (mm). */

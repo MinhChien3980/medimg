@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -61,7 +62,7 @@ class PredictionServiceTest {
     private final JobOutbox outbox = mock(JobOutbox.class);
     private final JobQueuePort queue = mock(JobQueuePort.class);
     private final PredictionService service = new PredictionService(jobs, mock(PredictionResultRepository.class),
-            mock(FindingRepository.class), models, studies, outbox, queue,
+            mock(FindingRepository.class), mock(FindingMapper.class), models, studies, outbox, queue,
             mock(ObjectStoragePort.class), JsonMapper.builder().build(), mock(ApplicationEventPublisher.class),
             new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC));
 
@@ -79,7 +80,8 @@ class PredictionServiceTest {
         when(model.supportsModality("CR")).thenReturn(true);
         when(models.findFirstByCodeAndStatusOrderByCreatedAtDesc("cxr", AiModel.Status.ACTIVE)).thenReturn(Optional.of(model));
         when(studies.requireSeries(studyId, seriesId))
-                .thenReturn(new SeriesRef(studyId, seriesId, UUID.randomUUID(), "IMAGE_2D", "CR", "CHEST", "IMAGE_2D", "s3://b/k"));
+                .thenReturn(new SeriesRef(studyId, seriesId, UUID.randomUUID(), "IMAGE_2D", "CR", "CHEST", "IMAGE_2D", "s3://b/k",
+                        List.of(300, 300, 1), null));
         when(jobs.saveAndFlush(any(PredictionJob.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
     }

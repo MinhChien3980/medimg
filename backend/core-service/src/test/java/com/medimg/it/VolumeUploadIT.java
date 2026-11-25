@@ -239,6 +239,9 @@ class VolumeUploadIT extends IntegrationTest {
         assertThat(series.get("cols").asInt()).isEqualTo(2048);
         assertThat(series.get("rows").asInt()).isEqualTo(2500);
         assertThat(series.get("spacingAssumed").asBoolean()).isFalse();
+        assertThat(series.get("spacing").isNull()).isTrue();
+        assertThat(series.get("pixelSpacing").get(0).asDouble()).isEqualTo(0.143);
+        assertThat(series.get("pixelSpacing").get(1).asDouble()).isEqualTo(0.143);
 
         Response job = post("/predictions", doctor, Map.of("studyId", studyId, "seriesId", series.get("id").asString(),
                 "modelCode", "cxr-multilabel"));

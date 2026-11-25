@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!--
+  Report PDF template (Thymeleaf, rendered by openhtmltopdf). Written as XHTML: the renderer parses it as XML.
+  ${doc} is a ReportDocument, already worded in the report's language; #{...} reads report/messages_*.properties.
+-->
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${doc.languageTag()}">
+<head>
+    <meta charset="UTF-8"/>
+    <title th:text="${doc.title()}">Report</title>
+    <link rel="stylesheet" href="report.css"/>
+</head>
+<body>
+
+<div class="page-header">
+    <span class="platform" th:text="#{platform.name}">MedImg</span>
+    <span class="banner" th:text="#{report.banner}">Research demo</span>
+</div>
+
+<div class="page-footer">
+    <span th:text="|${doc.patient().code()} · ${doc.title()} · #{report.version(${doc.version()})}|">Case · Report</span>
+    <span class="page-number"><span th:text="#{page}">Page</span> <span class="page"></span> / <span class="pages"></span></span>
+</div>
+
+<div class="watermark" th:if="${doc.draft()}" th:text="#{report.watermark}">DRAFT</div>
+
+<h1 th:text="${doc.title()}">Report</h1>
+<p class="version" th:text="#{report.version(${doc.version()})}">Version 1</p>
+<p class="amendment" th:if="${doc.amendment() != null}"
+   th:text="#{report.amends(${doc.amendment().version()}, ${doc.amendment().signedOn()})}">Amends report v1</p>
+
+<table class="facts">
+    <tr>
+        <th th:text="#{case.code}">Case code</th>
+        <td th:text="${doc.patient().code()}">CASE-0001</td>
+        <th th:text="#{case.birthYear}">Birth year</th>
+        <td th:text="${doc.patient().birthYear()}">1970</td>
+        <th th:text="#{case.sex}">Sex</th>
+        <td th:text="${doc.patient().sex()}">F</td>
+    </tr>
+    <tr>
+        <th th:text="#{study.modality}">Modality</th>
+        <td th:text="${doc.study().modality()}">CR</td>
+        <th th:text="#{study.date}">Date</th>
+        <td th:text="${doc.study().date()}">2026-01-01</td>
+        <th th:text="#{study.size}">Size</th>
+        <td th:text="${doc.study().size()}">2048 × 2048 px</td>
+    </tr>
+</table>
+
+<div class="section" th:if="${doc.clinicalInfo() != null}">
+    <h2 th:text="#{section.clinicalInfo}">Clinical information</h2>
+    <p class="text" th:text="${doc.clinicalInfo()}">...</p>
+</div>
+
+<div class="section" th:if="${doc.technique() != null}">
+    <h2 th:text="#{section.technique}">Technique</h2>
+    <p class="text" th:text="${doc.technique()}">...</p>
+</div>
+
+<div class="section">
+    <h2 th:text="#{section.findingsTable}">Reviewed findings</h2>
+    <table class="findings" th:if="${!doc.findings().isEmpty()}">
+        <thead>
+        <tr>
+            <th th:text="#{table.label}">Finding</th>
+            <th th:text="#{table.source}">Source</th>
+            <th th:text="#{table.value}">Confidence / volume</th>
+            <th th:text="#{table.note}">Note</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="finding : ${doc.findings()}">
+            <td th:text="${finding.label()}">Effusion</td>
+            <td th:text="${finding.source()}">AI</td>
+            <td class="number" th:text="${finding.value()}">87%</td>
+            <td th:text="${finding.note()}"></td>
+        </tr>
+        </tbody>
+    </table>
+    <p class="empty" th:if="${doc.findings().isEmpty()}" th:text="#{table.empty}">No accepted findings.</p>
+</div>
+
+<div class="section" th:if="${doc.findingsText() != null}">
+    <h2 th:text="#{section.findings}">Findings</h2>
+    <p class="text" th:text="${doc.findingsText()}">...</p>
+</div>
+
+<div class="section" th:if="${!doc.figures().isEmpty()}">
+    <h2 th:text="#{section.keyImages}">Key images</h2>
+    <div class="figure" th:each="figure, it : ${doc.figures()}">
+        <img th:src="|figure:${it.index}|" th:alt="${figure.caption()}" alt=""/>
+        <p class="caption" th:text="|${it.count}. ${figure.caption() != null ? figure.caption() : ''}|">1. Caption</p>
+    </div>
+</div>
+
+<div class="section impression" th:if="${doc.impression() != null}">
+    <h2 th:text="#{section.impression}">Impression</h2>
+    <p class="text" th:text="${doc.impression()}">...</p>
+</div>
+
+<table class="signature">
+    <tr>
+        <th th:text="#{signature.signedBy}">Signed by</th>
+        <td th:text="${doc.signature() != null ? doc.signature().signer() : #messages.msg('signature.pending')}">Dr</td>
+    </tr>
+    <tr th:if="${doc.signature() != null}">
+        <th th:text="#{signature.signedAt}">Signed at</th>
+        <td th:text="${doc.signature().signedAt()}">2026-01-01 10:00 UTC</td>
+    </tr>
+</table>
+
+</body>
+</html>

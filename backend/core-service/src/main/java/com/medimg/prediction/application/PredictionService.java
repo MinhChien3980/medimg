@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,13 +57,13 @@ public class PredictionService {
     private static final Logger log = LoggerFactory.getLogger(PredictionService.class);
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() { };
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() { };
-    private static final TypeReference<List<Double>> DOUBLE_LIST = new TypeReference<>() { };
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() { };
     private static final TypeReference<List<MeshArtifact>> MESH_LIST = new TypeReference<>() { };
 
     private final PredictionJobRepository jobs;
     private final PredictionResultRepository results;
     private final FindingRepository findings;
+    private final FindingMapper findingMapper;
     private final AiModelRepository models;
     private final StudyService studies;
     private final JobOutbox outbox;
@@ -74,12 +75,13 @@ public class PredictionService {
     private final Clock clock;
 
     PredictionService(PredictionJobRepository jobs, PredictionResultRepository results, FindingRepository findings,
-                      AiModelRepository models, StudyService studies, JobOutbox outbox, JobQueuePort queue,
-                      ObjectStoragePort storage, ObjectMapper json, ApplicationEventPublisher events,
+                      FindingMapper findingMapper, AiModelRepository models, StudyService studies, JobOutbox outbox,
+                      JobQueuePort queue, ObjectStoragePort storage, ObjectMapper json, ApplicationEventPublisher events,
                       TransactionTemplate tx, Clock clock) {
         this.jobs = jobs;
         this.results = results;
         this.findings = findings;
+        this.findingMapper = findingMapper;
         this.models = models;
         this.studies = studies;
         this.outbox = outbox;
@@ -153,6 +155,17 @@ public class PredictionService {
     public List<PredictionDto> listByStudy(UUID studyId) {
         studies.requireExists(studyId);
         return toDtos(jobs.findByStudyIdOrderByQueuedAtDesc(studyId));
+    }
+
+    /** The models (code and version) of the study's DONE jobs, e.g. for the technique section of a report. */
+    @Transactional(readOnly = true)
+    public List<ModelRef> modelsOfDoneJobs(UUID studyId) {
+        List<UUID> modelIds = jobs.findByStudyIdOrderByQueuedAtDesc(studyId).stream()
+                .filter(j -> j.getStatus() == JobStatus.DONE).map(PredictionJob::getModelId).distinct().toList();
+        return models.findAllById(modelIds).stream()
+                .map(m -> new ModelRef(m.getCode(), m.getVersion()))
+                .sorted(Comparator.comparing(ModelRef::code).thenComparing(ModelRef::version))
+                .toList();
     }
 
     /** The most recently queued job of each of the given studies that has one. */
@@ -252,17 +265,16 @@ public class PredictionService {
                 .stream().collect(Collectors.toMap(AiModel::getId, Function.identity()));
         Map<UUID, PredictionResult> resultByJob = results.findByJobIdIn(jobIds).stream()
                 .collect(Collectors.toMap(PredictionResult::getJobId, Function.identity()));
-        Map<UUID, List<Finding>> findingsByResult = resultByJob.isEmpty() ? Map.of()
-                : findings.findByResultIds(resultByJob.values().stream().map(PredictionResult::getId).toList())
-                .stream().collect(Collectors.groupingBy(Finding::getResultId));
+        List<Finding> allFindings = resultByJob.isEmpty() ? List.of()
+                : findings.findByResultIds(resultByJob.values().stream().map(PredictionResult::getId).toList());
+        Map<UUID, List<Finding>> findingsByResult = allFindings.stream().collect(Collectors.groupingBy(Finding::getResultId));
+        Function<Finding, FindingDto> toFindingDto = findingMapper.converterFor(allFindings);
 
         return list.stream().map(job -> {
             AiModel model = modelById.get(job.getModelId());
             PredictionResult result = job.getStatus() == JobStatus.DONE ? resultByJob.get(job.getId()) : null;
-            List<FindingDto> fs = result == null ? List.of() : findingsByResult.getOrDefault(result.getId(), List.of()).stream()
-                    .map(f -> new FindingDto(f.getId(), f.getLabel(), f.getConfidence(), f.getVolumeMl(),
-                            f.getBbox() == null ? null : json.readValue(f.getBbox(), DOUBLE_LIST), f.getReviewStatus()))
-                    .toList();
+            List<FindingDto> fs = result == null ? List.of()
+                    : findingsByResult.getOrDefault(result.getId(), List.of()).stream().map(toFindingDto).toList();
             Instant finished = job.getFinishedAt();
             return new PredictionDto(job.getId(), job.getStudyId(), job.getSeriesId(), job.getStatus().name(),
                     job.getProgress(), job.getAttempt(),

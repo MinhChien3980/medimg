@@ -133,7 +133,36 @@ class IngestResultHandlerTest {
         assertThat(s.getRows()).isEqualTo(2500);
         assertThat(s.getNumImages()).isEqualTo(1);
         assertThat(s.spacing()).isNull();
+        assertThat(s.pixelSpacing()).containsExactly(0.14, 0.14);
         assertThat(xray.getStatus()).isEqualTo(Status.DONE);
+    }
+
+    @Test
+    void dicomImageWithoutPixelSpacingIsNotCalibrated() {
+        UploadSession xray = dicomUpload();
+
+        handler.handle(new IngestResult(xray.getId(), 1, "w1", Type.DONE, 0,
+                imagePayload(xray, "[2000,2500,1]").replace("[0.14,0.14,null]", "null"), null, false));
+
+        ArgumentCaptor<Series> saved = ArgumentCaptor.forClass(Series.class);
+        verify(series).save(saved.capture());
+        assertThat(saved.getValue().pixelSpacing()).isNull();
+        assertThat(xray.getStatus()).isEqualTo(Status.DONE);
+    }
+
+    @Test
+    void pixelSpacingOfA2dImageMustBeTwoPositiveNumbers() {
+        UploadSession zero = dicomUpload();
+        UploadSession withZ = dicomUpload();
+
+        handler.handle(new IngestResult(zero.getId(), 1, "w1", Type.DONE, 0,
+                imagePayload(zero, "[512,512,1]").replace("[0.14,0.14,null]", "[0,0.14,null]"), null, false));
+        handler.handle(new IngestResult(withZ.getId(), 1, "w1", Type.DONE, 0,
+                imagePayload(withZ, "[512,512,1]").replace("[0.14,0.14,null]", "[0.14,0.14,1]"), null, false));
+
+        assertThat(zero.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        assertThat(withZ.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        verifyNoInteractions(studies, series);
     }
 
     @Test

@@ -33,6 +33,11 @@ public class ApiException extends ErrorResponseException {
         return new ApiException(HttpStatus.UNAUTHORIZED, "Unauthorized", detail);
     }
 
+    /** The caller's role allows the action in general but not on this resource, e.g. someone else's annotation. */
+    public static ApiException forbidden(String detail) {
+        return new ApiException(HttpStatus.FORBIDDEN, "Forbidden", detail);
+    }
+
     public static ApiException unprocessable(String detail) {
         return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "Unprocessable", detail);
     }

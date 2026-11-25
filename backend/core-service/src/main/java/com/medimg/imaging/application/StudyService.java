@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.medimg.imaging.application.ImagingDtos.SeriesDto;
 import com.medimg.imaging.application.ImagingDtos.SeriesRef;
+import com.medimg.imaging.application.ImagingDtos.StudyRef;
 import com.medimg.imaging.application.ImagingDtos.StudyDto;
 import com.medimg.imaging.domain.Series;
 import com.medimg.imaging.domain.Study;
@@ -58,15 +59,23 @@ public class StudyService {
                 .collect(Collectors.groupingBy(StudyDto::patientId));
     }
 
-    /** For the prediction module: validates that the series belongs to the study. */
+    /** For other modules: validates that the series belongs to the study. */
     @Transactional(readOnly = true)
     public SeriesRef requireSeries(UUID studyId, UUID seriesId) {
         Study study = require(studyId);
         Series s = series.findById(seriesId)
                 .filter(x -> x.getStudyId().equals(studyId))
                 .orElseThrow(() -> ApiException.notFound("Series", seriesId));
-        return new SeriesRef(study.getId(), s.getId(), study.getPatientId(), study.getInputType().name(),
-                s.getModality(), study.getBodyPart(), study.getInputType().normalized().name(), storage.uri(s.getImageKey()));
+        return toRef(study, s);
+    }
+
+    /** For other modules: the study and its series, e.g. to describe it in a report. */
+    @Transactional(readOnly = true)
+    public StudyRef describe(UUID studyId) {
+        Study study = require(studyId);
+        return new StudyRef(study.getId(), study.getPatientId(), study.getInputType().name(), study.getModality(),
+                study.getBodyPart(), study.getCreatedAt(),
+                series.findByStudyIdOrderByCreatedAtAsc(studyId).stream().map(s -> toRef(study, s)).toList());
     }
 
     @Transactional(readOnly = true)
@@ -104,7 +113,13 @@ public class StudyService {
         URI stored = url(s.getImageKey());
         return new SeriesDto(s.getId(), s.getModality(), s.getRows(), s.getCols(), s.getNumImages(),
                 volume ? null : stored, url(s.getThumbnailKey()), volume ? stored : null,
-                volume ? s.dims() : null, volume ? s.spacing() : null, s.isSpacingAssumed());
+                volume ? s.dims() : null, s.spacing(), s.isSpacingAssumed(), s.pixelSpacing());
+    }
+
+    private SeriesRef toRef(Study study, Series s) {
+        return new SeriesRef(study.getId(), s.getId(), study.getPatientId(), study.getInputType().name(),
+                s.getModality(), study.getBodyPart(), study.getInputType().normalized().name(), storage.uri(s.getImageKey()),
+                s.dims(), study.getInputType().isVolume() ? s.spacing() : s.pixelSpacing());
     }
 
     private URI url(String key) {

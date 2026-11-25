@@ -14,7 +14,8 @@ public record IngestResult(UUID uploadId, int attempt, String workerId, Type typ
 
     /**
      * Shape of {@code payload} for DONE messages, written by the ingest worker. {@code inputType} is what the input
-     * turned out to be. A 2D image ({@code DICOM_2D}) comes as {@code imageUri} (PNG) with {@code dims [w, h, 1]}; a
+     * turned out to be. A 2D image ({@code DICOM_2D}) comes as {@code imageUri} (PNG) with {@code dims [w, h, 1]} and,
+     * when the DICOM header gives it, its pixel spacing as {@code spacing [x, y, null]} (mm); a
      * volume as {@code volumeUri} (NIfTI) with {@code dims} and {@code spacing} {@code [x, y, z]}, where
      * {@code spacingAssumed} tells that the spacing of a stack of 2D images was not given.
      */
