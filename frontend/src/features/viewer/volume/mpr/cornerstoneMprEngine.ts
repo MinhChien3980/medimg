@@ -12,15 +12,20 @@ import {
 } from '@cornerstonejs/core';
 import {
   addTool,
+  annotation as annotationApi,
   CrosshairsTool,
+  EllipticalROITool,
   Enums as ToolEnums,
   init as initTools,
+  LengthTool,
   PanTool,
+  RectangleROITool,
   segmentation,
   StackScrollTool,
   SynchronizerManager,
   synchronizers,
   ToolGroupManager,
+  utilities as toolUtilities,
   WindowLevelTool,
   ZoomTool,
   type Types as ToolTypes,
@@ -33,6 +38,15 @@ import type { Vec3 } from '@/api/types';
 import { absoluteUrl } from './niftiUrl';
 import { fromVoiRange, toVoiRange, type CtWindow } from '../../lib/ctWindow';
 import type { Rgba } from '../structures';
+import {
+  displayKey,
+  fromCornerstoneAnnotation,
+  hasStats,
+  kindOfTool,
+  toCornerstoneAnnotation,
+  type CsAnnotation,
+  type MprAnnotationInput,
+} from './annotationConverters';
 import {
   MPR_ORIENTATIONS,
   type MprElements,
@@ -66,6 +80,9 @@ const TOOL_NAME: Record<MprTool, string> = {
   windowLevel: WindowLevelTool.toolName as string,
   pan: PanTool.toolName as string,
   zoom: ZoomTool.toolName as string,
+  rectangleRoi: RectangleROITool.toolName,
+  ellipseRoi: EllipticalROITool.toolName,
+  length: LengthTool.toolName,
 };
 
 /** Bindings each tool keeps when it is not the left-button tool. */
@@ -74,7 +91,24 @@ const SECONDARY_BINDINGS: Record<MprTool, ToolTypes.IToolBinding[]> = {
   windowLevel: [{ mouseButton: ToolEnums.MouseBindings.Secondary }],
   pan: [{ mouseButton: ToolEnums.MouseBindings.Auxiliary }],
   zoom: [],
+  // Passive when not selected: existing measurements stay editable (handles), none is drawn.
+  rectangleRoi: [],
+  ellipseRoi: [],
+  length: [],
 };
+
+const ANNOTATION_TOOLS = [RectangleROITool, EllipticalROITool, LengthTool];
+
+/** Quiet time after the last change of an annotation before it is reported. */
+const ANNOTATION_SETTLE_MS = 250;
+/** How many times a report waits for an ROI's statistics before going without them. */
+const STATS_ATTEMPTS = 8;
+
+interface AnnotationEventDetail {
+  annotation?: CsAnnotation;
+  renderingEngineId?: string;
+  changeType?: string;
+}
 
 let initialised: Promise<void> | null = null;
 
@@ -85,7 +119,14 @@ export function initCornerstone(): Promise<void> {
       initCore();
       initTools();
       imageLoader.registerImageLoader(NIFTI_SCHEME, cornerstoneNiftiImageLoader);
-      for (const tool of [CrosshairsTool, StackScrollTool, WindowLevelTool, PanTool, ZoomTool]) {
+      for (const tool of [
+        CrosshairsTool,
+        StackScrollTool,
+        WindowLevelTool,
+        PanTool,
+        ZoomTool,
+        ...ANNOTATION_TOOLS,
+      ]) {
         addTool(tool);
       }
     })
@@ -143,6 +184,18 @@ class CornerstoneMprEngine implements MprEngine {
   private pointerDown = false;
   private volumeCounter = 0;
   private reapplyScheduled = false;
+  private frameOfReferenceUID: string | null = null;
+  /** Annotations to show (applied once the volume is loaded). */
+  private wanted: readonly MprAnnotationInput[] = [];
+  /** Annotations given by `setAnnotations` or reported by `onAnnotationChange`. */
+  private readonly owned = new Set<string>();
+  /** What is displayed for each owned annotation (`displayKey`). */
+  private readonly shown = new Map<string, string>();
+  /** Changed by the user, not reported yet → number of waits for statistics. */
+  private readonly dirty = new Map<string, number>();
+  /** Being removed by the engine itself: its REMOVED event is not reported. */
+  private readonly removing = new Set<string>();
+  private settleTimer: number | null = null;
   private readonly elements: MprElements;
   private readonly events: MprEngineEvents;
 
@@ -183,8 +236,11 @@ class CornerstoneMprEngine implements MprEngine {
         Object.values(this.viewportIds),
       );
       this.assertAlive();
+      this.frameOfReferenceUID =
+        this.renderingEngine.getViewport(this.viewportIds.axial).getFrameOfReferenceUID() ?? null;
       this.applyWindow();
       this.applyTool();
+      this.applyAnnotations();
       this.renderingEngine.render();
       return { range: scalarRange(cache.getVolume(volume.volumeId)) };
     }, NO_STATS);
@@ -261,6 +317,46 @@ class CornerstoneMprEngine implements MprEngine {
     utilities.scroll(viewport, { delta, volumeId: this.volumeId });
   }
 
+  setAnnotations(annotations: readonly MprAnnotationInput[]): void {
+    this.wanted = annotations;
+    if (this.volumeId && !this.destroyed) this.applyAnnotations();
+  }
+
+  selectAnnotation(uid: string | null): void {
+    if (this.destroyed) return;
+    const { selection } = annotationApi;
+    if (uid && annotationApi.state.getAnnotation(uid)) {
+      if (!selection.isAnnotationSelected(uid)) selection.setAnnotationSelected(uid, true);
+    } else if (selection.getAnnotationsSelectedCount() > 0) {
+      selection.deselectAnnotation();
+    }
+    this.renderAnnotations();
+  }
+
+  async capture(orientation: MprOrientation): Promise<Blob | null> {
+    if (this.destroyed || !this.volumeId) return null;
+    const viewport = this.renderingEngine.getViewport(this.viewportIds[orientation]);
+    const canvas = viewport.canvas;
+    const out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0);
+    const imageOnly = await toPngBlob(out);
+    // The measurements are an SVG layer over the canvas: draw it on top when the browser allows
+    // reading the result back (an SVG image without foreignObject does not taint the canvas).
+    const svg = this.elements[orientation].querySelector('svg');
+    if (!svg) return imageOnly;
+    try {
+      const layer = await svgImage(svg, canvas.clientWidth, canvas.clientHeight);
+      ctx.drawImage(layer, 0, 0, out.width, out.height);
+      return (await toPngBlob(out)) ?? imageOnly;
+    } catch {
+      return imageOnly;
+    }
+  }
+
   reset(): void {
     if (!this.volumeId || this.destroyed) return;
     for (const id of Object.values(this.viewportIds)) {
@@ -278,6 +374,10 @@ class CornerstoneMprEngine implements MprEngine {
     if (this.destroyed) return;
     this.destroyed = true;
     for (const off of this.listeners.splice(0)) off();
+    if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+    // The annotation state is global to the page: leave nothing behind for the next viewer.
+    for (const uid of this.owned) annotationApi.state.removeAnnotation(uid);
+    this.owned.clear();
     this.removeLabelmap();
     ToolGroupManager.destroyToolGroup(this.toolGroupId);
     SynchronizerManager.destroySynchronizer(this.voiSyncId);
@@ -355,6 +455,7 @@ class CornerstoneMprEngine implements MprEngine {
     group.addTool(WindowLevelTool.toolName as string);
     group.addTool(PanTool.toolName as string);
     group.addTool(ZoomTool.toolName as string);
+    for (const tool of ANNOTATION_TOOLS) group.addTool(tool.toolName);
     const orientationOf = (viewportId: string) =>
       MPR_ORIENTATIONS.find((o) => this.viewportIds[o] === viewportId) ?? 'axial';
     group.addTool(CrosshairsTool.toolName as string, {
@@ -434,6 +535,163 @@ class CornerstoneMprEngine implements MprEngine {
     this.renderingEngine.render();
   }
 
+  // ---------- annotations ----------
+
+  private isOurs(annotation: CsAnnotation | undefined): annotation is CsAnnotation {
+    return (
+      !!annotation?.annotationUID &&
+      kindOfTool(annotation.metadata.toolName) !== null &&
+      !!this.frameOfReferenceUID &&
+      annotation.metadata.FrameOfReferenceUID === this.frameOfReferenceUID
+    );
+  }
+
+  /** Makes the displayed annotations match `wanted` (see `MprEngine.setAnnotations`). */
+  private applyAnnotations(): void {
+    const frameOfReferenceUID = this.frameOfReferenceUID;
+    if (!frameOfReferenceUID) return;
+    const { state, locking } = annotationApi;
+    const wanted = new Map(this.wanted.map((a) => [a.uid, a]));
+    for (const uid of [...this.owned]) {
+      if (wanted.has(uid) || this.dirty.has(uid)) continue;
+      this.removeOwned(uid);
+    }
+    for (const input of this.wanted) {
+      const key = displayKey(input);
+      const existing = stateAnnotation(input.uid);
+      if (existing && (this.shown.get(input.uid) === key || this.dirty.has(input.uid))) {
+        // Same shape (or being edited right now): only the label and the lock may change.
+        existing.data.label = input.label ?? '';
+        locking.setAnnotationLocked(input.uid, input.locked);
+        this.owned.add(input.uid);
+        continue;
+      }
+      if (existing) this.removeOwned(input.uid);
+      const created = toCornerstoneAnnotation(input, frameOfReferenceUID);
+      state.addAnnotation(created as unknown as ToolTypes.Annotation, this.elements.axial);
+      locking.setAnnotationLocked(input.uid, input.locked);
+      this.owned.add(input.uid);
+      this.shown.set(input.uid, key);
+    }
+    this.renderAnnotations();
+  }
+
+  private removeOwned(uid: string): void {
+    this.removing.add(uid);
+    annotationApi.state.removeAnnotation(uid);
+    this.removing.delete(uid);
+    this.owned.delete(uid);
+    this.shown.delete(uid);
+  }
+
+  private renderAnnotations(): void {
+    toolUtilities.triggerAnnotationRenderForViewportIds(Object.values(this.viewportIds));
+  }
+
+  private markDirty(uid: string): void {
+    if (!this.dirty.has(uid)) this.dirty.set(uid, 0);
+    this.scheduleSettle();
+  }
+
+  private scheduleSettle(): void {
+    if (this.settleTimer !== null) window.clearTimeout(this.settleTimer);
+    this.settleTimer = window.setTimeout(() => this.settle(), ANNOTATION_SETTLE_MS);
+  }
+
+  /** Reports the annotations changed by the user, once the pointer is up and stats are known. */
+  private settle(): void {
+    this.settleTimer = null;
+    if (this.destroyed || this.dirty.size === 0) return;
+    if (this.pointerDown) return; // pointer up schedules the next attempt
+    let waiting = false;
+    for (const [uid, attempts] of [...this.dirty]) {
+      const annotation = stateAnnotation(uid);
+      if (!annotation) {
+        this.dirty.delete(uid);
+        continue;
+      }
+      if (!hasStats(annotation) && attempts < STATS_ATTEMPTS) {
+        this.dirty.set(uid, attempts + 1);
+        waiting = true;
+        continue;
+      }
+      this.dirty.delete(uid);
+      const converted = fromCornerstoneAnnotation(annotation, {
+        hounsfield: true,
+        fallback: this.cameraFor(annotation),
+      });
+      if (!converted) continue;
+      this.owned.add(uid);
+      this.shown.set(
+        uid,
+        displayKey({ uid, ...converted, label: annotation.data.label ?? null, locked: false }),
+      );
+      this.events.onAnnotationChange?.({ uid, ...converted });
+    }
+    if (waiting) this.scheduleSettle();
+  }
+
+  /** View plane of the view an annotation was drawn on, when its metadata lacks it. */
+  private cameraFor(annotation: CsAnnotation): { viewPlaneNormal: Vec3; viewUp: Vec3 } | undefined {
+    const normal = annotation.metadata.viewPlaneNormal;
+    for (const id of Object.values(this.viewportIds)) {
+      const camera = this.renderingEngine.getViewport(id).getCamera();
+      const n = camera.viewPlaneNormal;
+      const up = camera.viewUp;
+      if (!n || !up) continue;
+      const parallel =
+        !normal ||
+        Math.abs(n[0] * (normal[0] ?? 0) + n[1] * (normal[1] ?? 0) + n[2] * (normal[2] ?? 0)) >
+          0.999;
+      if (parallel) return { viewPlaneNormal: [n[0], n[1], n[2]], viewUp: [up[0], up[1], up[2]] };
+    }
+    return undefined;
+  }
+
+  private listenToAnnotations(): void {
+    const detailOf = (evt: Event) => (evt as CustomEvent<AnnotationEventDetail>).detail;
+    const onCompleted = (evt: Event) => {
+      const { annotation } = detailOf(evt);
+      if (this.isOurs(annotation) && annotation.annotationUID) {
+        this.markDirty(annotation.annotationUID);
+      }
+    };
+    const onModified = (evt: Event) => {
+      const { annotation, renderingEngineId, changeType } = detailOf(evt);
+      if (renderingEngineId !== this.prefix || !this.isOurs(annotation)) return;
+      const uid = annotation.annotationUID ?? '';
+      if (changeType === ToolEnums.ChangeTypes.StatsUpdated) {
+        if (this.dirty.has(uid)) this.scheduleSettle();
+        return;
+      }
+      // Moved or reshaped by the user (drawing in progress counts too; it settles on release).
+      if (!this.removing.has(uid)) this.markDirty(uid);
+    };
+    const onRemoved = (evt: Event) => {
+      const uid = detailOf(evt).annotation?.annotationUID;
+      if (!uid || this.removing.has(uid)) return;
+      this.dirty.delete(uid);
+      if (!this.owned.delete(uid)) return;
+      this.shown.delete(uid);
+      this.events.onAnnotationRemove?.(uid);
+    };
+    const onSelection = (evt: Event) => {
+      const selection = (evt as CustomEvent<{ selection?: string[] }>).detail.selection ?? [];
+      const mine = selection.filter((uid) => this.owned.has(uid));
+      this.events.onAnnotationSelect?.(mine[mine.length - 1] ?? null);
+    };
+    const pairs: Array<[string, (evt: Event) => void]> = [
+      [ToolEnums.Events.ANNOTATION_COMPLETED, onCompleted],
+      [ToolEnums.Events.ANNOTATION_MODIFIED, onModified],
+      [ToolEnums.Events.ANNOTATION_REMOVED, onRemoved],
+      [ToolEnums.Events.ANNOTATION_SELECTION_CHANGE, onSelection],
+    ];
+    for (const [type, listener] of pairs) {
+      eventTarget.addEventListener(type, listener);
+      this.listeners.push(() => eventTarget.removeEventListener(type, listener));
+    }
+  }
+
   private crosshairs(): CrosshairsTool | undefined {
     return ToolGroupManager.getToolGroup(this.toolGroupId)?.getToolInstance(
       CrosshairsTool.toolName as string,
@@ -483,6 +741,7 @@ class CornerstoneMprEngine implements MprEngine {
     };
     const onUp = () => {
       this.pointerDown = false;
+      if (this.dirty.size > 0) this.scheduleSettle();
     };
     for (const element of Object.values(this.elements)) {
       element.addEventListener(Enums.Events.VOI_MODIFIED, onVoi);
@@ -498,6 +757,7 @@ class CornerstoneMprEngine implements MprEngine {
       window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', onUp, true);
     });
+    this.listenToAnnotations();
   }
 }
 
@@ -523,6 +783,38 @@ function scalarRange(volume: { voxelManager?: unknown } | undefined): [number, n
     return [scanned.min, scanned.max];
   }
   return fast ?? NO_STATS.range;
+}
+
+/** An annotation of the global annotation state, seen through the fields the converters use. */
+function stateAnnotation(uid: string): CsAnnotation | undefined {
+  return annotationApi.state.getAnnotation(uid) as unknown as CsAnnotation | undefined;
+}
+
+function toPngBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob(resolve, 'image/png');
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+/** The SVG layer of a view as an image of `width` × `height` CSS pixels. */
+async function svgImage(
+  svg: SVGSVGElement,
+  width: number,
+  height: number,
+): Promise<HTMLImageElement> {
+  const copy = svg.cloneNode(true) as SVGSVGElement;
+  copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  copy.setAttribute('width', String(width));
+  copy.setAttribute('height', String(height));
+  const markup = new XMLSerializer().serializeToString(copy);
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
+  await image.decode();
+  return image;
 }
 
 /** Object path of a presigned URL, for error messages (the signature is not logged). */

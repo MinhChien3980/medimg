@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type Ref,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -51,8 +52,20 @@ export interface ViewerOverlay {
 export interface ImageViewerHandle {
   /** Fit to window and restore the default window/level. */
   reset: () => void;
-  /** PNG of the current view (image + overlays), or null if unavailable. */
+  /**
+   * PNG of the current view: image, heatmap overlays and whatever `paintOverlay` paints (the
+   * visible annotations), or null if unavailable.
+   */
   toBlob: () => Promise<Blob | null>;
+}
+
+/** The viewer's current image → screen mapping, given to `children` (e.g. an SVG annotation layer). */
+export interface ViewerTransform {
+  viewport: Viewport;
+  /** Natural size of the image, in pixels. */
+  image: Size;
+  /** Size of the viewer, in CSS pixels (the layer covers the viewer exactly). */
+  view: Size;
 }
 
 export interface ImageViewer2DProps {
@@ -64,6 +77,14 @@ export interface ImageViewer2DProps {
   onImageLoad?: (size: Size) => void;
   onOverlayError?: (overlay: ViewerOverlay) => void;
   ariaLabel?: string;
+  /**
+   * Layer drawn on top of the image (rendered once the image is shown). Its pointer and key events
+   * reach the viewer unless it stops their propagation, so it handles what it needs (e.g. the left
+   * button while drawing) and the viewer keeps wheel zoom, middle-drag pan and right-drag W/L.
+   */
+  children?: (transform: ViewerTransform) => ReactNode;
+  /** Paints the layer of `children` into captures (`toBlob`), in CSS pixels of the viewer. */
+  paintOverlay?: (ctx: CanvasRenderingContext2D, viewport: Viewport) => void;
   ref?: Ref<ImageViewerHandle>;
 }
 
@@ -140,6 +161,8 @@ export function ImageViewer2D({
   onImageLoad,
   onOverlayError,
   ariaLabel,
+  children,
+  paintOverlay,
   ref,
 }: ImageViewer2DProps) {
   const { t } = useTranslation();
@@ -148,6 +171,10 @@ export function ImageViewer2D({
   const bufferRef = useRef<WindowedBuffer | null>(null);
   const overlayCacheRef = useRef(new Map<string, OverlayEntry>());
   const dragRef = useRef<DragState | null>(null);
+  const captureRef = useRef<{
+    viewport: Viewport | null;
+    paint: ImageViewer2DProps['paintOverlay'];
+  }>({ viewport: null, paint: undefined });
 
   const [size, setSize] = useState<Size | null>(null);
   const [image, setImage] = useState<LoadedImage | null>(null);
@@ -160,6 +187,10 @@ export function ImageViewer2D({
   const fitted = image && size ? fitViewport(image, size, FIT_PADDING) : null;
   // A manual viewport survives URL refreshes of the same image, but not a new image size.
   const viewport = view && view.key === imageKey ? view.viewport : fitted;
+
+  useEffect(() => {
+    captureRef.current = { viewport, paint: paintOverlay };
+  });
 
   const loading = image?.url !== imageUrl && failedUrl !== imageUrl;
   const failed = failedUrl === imageUrl;
@@ -305,8 +336,24 @@ export function ImageViewer2D({
       toBlob: () =>
         new Promise<Blob | null>((resolve) => {
           const canvas = canvasRef.current;
-          if (!canvas) resolve(null);
-          else canvas.toBlob(resolve, 'image/png');
+          if (!canvas) {
+            resolve(null);
+            return;
+          }
+          const { viewport: current, paint } = captureRef.current;
+          const ctx = paint && current ? document.createElement('canvas').getContext('2d') : null;
+          if (!paint || !current || !ctx) {
+            canvas.toBlob(resolve, 'image/png');
+            return;
+          }
+          // Compose on a copy so the on-screen canvas never shows the baked-in layer.
+          ctx.canvas.width = canvas.width;
+          ctx.canvas.height = canvas.height;
+          ctx.drawImage(canvas, 0, 0);
+          const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          paint(ctx, current);
+          ctx.canvas.toBlob(resolve, 'image/png');
         }),
     }),
     [],
@@ -322,7 +369,7 @@ export function ImageViewer2D({
     return { x: clientX - (rect?.left ?? 0), y: clientY - (rect?.top ?? 0) };
   };
 
-  const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!viewport) return;
     const mode = modeFor(e.button, tool);
     if (!mode) return;
@@ -338,7 +385,7 @@ export function ImageViewer2D({
     };
   };
 
-  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     const dx = e.clientX - drag.startX;
@@ -358,7 +405,7 @@ export function ImageViewer2D({
     }
   };
 
-  const endDrag = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (dragRef.current?.pointerId === e.pointerId) {
       dragRef.current = null;
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -374,16 +421,18 @@ export function ImageViewer2D({
   });
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    // Non-passive so the page does not scroll while zooming.
+    const container = containerRef.current;
+    if (!container) return;
+    // Non-passive so the page does not scroll while zooming; on the container, so that zooming
+    // also works over the annotation layer.
     const listener = (e: WheelEvent) => onWheel(e);
-    canvas.addEventListener('wheel', listener, { passive: false });
-    return () => canvas.removeEventListener('wheel', listener);
+    container.addEventListener('wheel', listener, { passive: false });
+    return () => container.removeEventListener('wheel', listener);
   }, []);
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLCanvasElement>) => {
-    if (!viewport || !size) return;
+  // Keys reach the container from the focused canvas or from the layer of `children`.
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!viewport || !size || e.defaultPrevented) return;
     const center = { x: size.width / 2, y: size.height / 2 };
     const step = 40;
     const actions: Record<string, () => void> = {
@@ -406,8 +455,32 @@ export function ImageViewer2D({
     }
   };
 
+  const transform: ViewerTransform | null =
+    image && viewport && size
+      ? {
+          viewport,
+          image: { width: image.width, height: image.height },
+          view: size,
+        }
+      : null;
+
   return (
-    <div ref={containerRef} className="image-viewer">
+    // Pointer, wheel and key events bubble here from the focusable canvas and from the layer of
+    // `children`, which stops the ones it consumes.
+    <div
+      ref={containerRef}
+      className="image-viewer"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onContextMenu={(e) => e.preventDefault()}
+      onDoubleClick={() => {
+        setView(null);
+        setWl(DEFAULT_WINDOW);
+      }}
+      onKeyDown={onKeyDown}
+    >
       <canvas
         ref={canvasRef}
         className="image-viewer__canvas"
@@ -415,17 +488,8 @@ export function ImageViewer2D({
         tabIndex={0}
         role="img"
         aria-label={ariaLabel}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onContextMenu={(e) => e.preventDefault()}
-        onDoubleClick={() => {
-          setView(null);
-          setWl(DEFAULT_WINDOW);
-        }}
-        onKeyDown={onKeyDown}
       />
+      {transform && children?.(transform)}
       {loading && !image && (
         <div className="image-viewer__status" role="status" aria-label={t('common.loading')}>
           <Spin />

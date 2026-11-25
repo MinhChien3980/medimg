@@ -4,9 +4,12 @@ import type { Bounds } from '@/features/viewer/lib/clipping';
 import type { VolumeBackends } from '@/features/viewer/volume/backends';
 import type { MeshSceneProps } from '@/features/viewer/volume/mesh/MeshScene.types';
 import type {
+  MprAnnotationChange,
+  MprAnnotationInput,
   MprEngine,
   MprEngineEvents,
   MprLabelmap,
+  MprOrientation,
   MprTool,
   VolumeStats,
 } from '@/features/viewer/volume/mpr/MprEngine';
@@ -23,6 +26,10 @@ export class FakeMprEngine implements MprEngine {
   readonly jumps: Vec3[] = [];
   readonly opacities: number[] = [];
   readonly scrolls: Array<[string, number]> = [];
+  /** Every list given to `setAnnotations`, in order. */
+  readonly annotationSets: Array<readonly MprAnnotationInput[]> = [];
+  readonly selections: Array<string | null> = [];
+  readonly captures: MprOrientation[] = [];
   resets = 0;
   destroyed = 0;
   failLoad = false;
@@ -65,6 +72,28 @@ export class FakeMprEngine implements MprEngine {
   }
   reset(): void {
     this.resets += 1;
+  }
+  setAnnotations(annotations: readonly MprAnnotationInput[]): void {
+    this.annotationSets.push(annotations);
+  }
+  selectAnnotation(uid: string | null): void {
+    this.selections.push(uid);
+  }
+  capture(orientation: MprOrientation): Promise<Blob | null> {
+    this.captures.push(orientation);
+    return Promise.resolve(new Blob([`png of ${orientation}`], { type: 'image/png' }));
+  }
+  /** What the engine shows now (the last list it was given). */
+  get annotations(): readonly MprAnnotationInput[] {
+    return this.annotationSets[this.annotationSets.length - 1] ?? [];
+  }
+  /** Simulates the user finishing a drawing or an edit in a view. */
+  emitAnnotationChange(change: MprAnnotationChange): void {
+    this.events.onAnnotationChange?.(change);
+  }
+  /** Simulates the user clicking a measurement in a view. */
+  emitAnnotationSelect(uid: string | null): void {
+    this.events.onAnnotationSelect?.(uid);
   }
   resize(): void {}
   destroy(): void {

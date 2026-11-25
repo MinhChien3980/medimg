@@ -3,7 +3,9 @@
 React + TypeScript SPA: login, cases, a gallery of sample cases, upload of chest X-rays (PNG/JPG or
 one DICOM file) and volumes (NIfTI, a ZIP of a DICOM series or of PNG/JPG slices; multipart above
 64 MB), a 2D viewer with Grad-CAM heatmaps, a volume viewer (MPR with the organ segmentation
-overlaid, and 3D meshes) and live AI job progress. The REST API it talks to is
+overlaid, and 3D meshes), live AI job progress, review of AI findings and manual findings,
+annotations (2D shapes on X-rays, Cornerstone measurements on the MPR) and reports (draft, key
+images, PDF preview, signature, amendments). The REST API it talks to is
 documented by core-service's OpenAPI spec (Swagger UI at `/swagger-ui.html`); the matching types
 live in `src/api/types.ts`.
 
@@ -25,12 +27,12 @@ npm run dev        # http://localhost:5173
 
 Demo accounts (shown on the login page, click to fill), password `Demo@12345`:
 
-| User         | Role       | Can do                                                       |
-| ------------ | ---------- | ------------------------------------------------------------ |
-| `doctor`     | Doctor     | everything below                                             |
-| `tech`       | Technician | create cases, upload images, run / cancel / retry AI jobs    |
-| `admin`      | Admin      | same as doctor, plus marking cases as sample cases           |
-| `researcher` | Researcher | read-only: cases, samples, viewer, AI results, live progress |
+| User         | Role       | Can do                                                                                     |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
+| `doctor`     | Doctor     | everything below except sample cases, plus review findings, write and sign reports         |
+| `tech`       | Technician | create cases, upload images, run / cancel / retry AI jobs, annotate (own annotations only) |
+| `admin`      | Admin      | create cases, upload, run AI, mark sample cases, read draft reports; no clinical writes    |
+| `researcher` | Researcher | read-only: cases, samples, viewer, AI results, reviews, annotations, signed reports only   |
 
 ## Dev proxy
 
@@ -116,20 +118,28 @@ src/
     viewer/     viewer page (routes by input type), 2D view with ImageViewer2D (canvas),
                 pure viewport / window-level / CT window / clipping / camera math
       volume/   CT view: tabs MPR | 3D, structure list, label → colour mapping (structures.ts)
-        mpr/    MprView + MprEngine interface; cornerstoneMprEngine.ts (lazy chunk)
+        mpr/    MprView + MprEngine interface; cornerstoneMprEngine.ts (lazy chunk);
+                annotationConverters.ts (our volume geometry ↔ Cornerstone annotations, pure)
         mesh/   MeshView (clipping UI) + MeshScene (react-three-fiber, lazy chunk)
     ai/         AI panel, findings / structures tables, live prediction hook (SSE → polling)
+    review/     finding review (status chip, Accept / Edit / Reject, note, "Unreviewed" filter),
+                manual findings, optimistic review with rollback (reviewModel.ts is pure)
+    annotations/ 2D geometry and screen mapping (geometry2d.ts, scene2d.ts, pure), SVG layer,
+                tools, panel list, API hooks; MPR sync with the engine (useVolumeAnnotations.ts)
+    reports/    report page (`/studies/:id/report`, lazy), draft autosave, key images, PDF,
+                "Add to report" capture, report status of a study (reportModel.ts is pure)
   i18n/         vi (default) / en messages, typed keys
   shared/       ProblemDetail alert, presigned thumbnail, error boundary, 404, formatting helpers
-  test/         MSW server, fixtures (2D and CT), render helpers, fake MPR / 3D backends
-e2e/            Playwright smoke tests and their synthetic CT / image stack fixture generator
+  test/         MSW server (empty lists for the slice 3 study endpoints by default), fixtures,
+                render helpers, fake MPR / 3D backends
+e2e/            Playwright smoke tests and their synthetic CT / image stack / X-ray PNG fixtures
 ```
 
 `/studies/:id` loads the study and picks the view from `inputType`: `IMAGE_2D` and `DICOM_2D` (a
 DICOM X-ray, normalised by the worker to an 8-bit PNG) get the canvas viewer; `NIFTI`,
 `DICOM_SERIES` and `IMAGE_STACK` (all served as one normalised NIfTI volume) get the volume view.
-Later slices (review/report, dashboard) are meant to land as new folders under `features/` and new
-lazy routes in `app/router.tsx`.
+`/studies/:id/report` (lazy chunk) holds the study's report. Later slices (dashboard) are meant to
+land as new folders under `features/` and new lazy routes in `app/router.tsx`.
 
 ## Design notes
 
@@ -142,9 +152,12 @@ lazy routes in `app/router.tsx`.
   expired. `/auth/*` calls use a client without interceptors: login and logout never carry an
   access token, and logout clears the local session first, then revokes the refresh token.
 - **Permissions.** `features/auth/permissions.ts` maps roles to UI actions (create case, upload,
-  run AI, cancel / retry a job, and, for admins only, manage sample cases), mirroring
-  core-service's `@PreAuthorize` rules. Components ask
-  `useCan()` instead of checking roles; `/upload` is guarded by `RequirePermission`.
+  run AI, cancel / retry a job, and, for admins only, manage sample cases; from slice 3 `review`
+  for doctors, `annotate` for doctors and technicians, `report` for doctors and `viewDraftReport`
+  for everyone but researchers), mirroring core-service's access policy. Components ask
+  `useCan()` instead of checking roles; `/upload` is guarded by `RequirePermission`. Annotations
+  are edited and deleted by their author only (`canEditAnnotation`); others' are shown read-only
+  (locked on the MPR).
 - **Errors.** Every non-2xx body is read as RFC 7807 ProblemDetail and its `detail` is shown
   (field errors are listed and mapped onto form fields where possible). The new-case form mirrors
   the server limits (code up to 32 letters, digits, `-`, `_`; note up to 500 characters; birth
@@ -232,6 +245,69 @@ lazy routes in `app/router.tsx`.
   factory and a scene component), provided by context with the real lazy implementations as
   default. jsdom tests inject fakes (`src/test/fakeVolumeBackends.tsx`) and check what the views ask
   of them; the browser smoke test checks the real rendering.
+- **Finding review.** Each AI finding of a finished run (X-ray findings table, CT structure list)
+  shows its review status and, for doctors, Accept / Edit / Reject: Accept and Reject apply at
+  once, Edit opens a dialog (decision, corrected label up to 100 characters, note up to 1000). The
+  change is written to the run's cache and the study's findings cache before the request
+  (`PATCH /findings/{id}/review` with the finding's `version`); a failure restores both, and a 409
+  (reviewed elsewhere meanwhile) also refetches them and says so. An EDITED finding shows the
+  doctor's label with the AI label under it, a REJECTED one is struck through. "Unreviewed only"
+  filters each list, with a "2 of 5 reviewed" count. Doctors add findings of their own (`MANUAL`,
+  accepted at once), optionally located by the annotation selected in the viewer.
+- **2D annotations.** An SVG layer over the canvas draws through the same viewport transform as
+  the image (`imageToScreen` / `screenToImage` in `viewer/lib/viewport.ts`, round trips unit
+  tested at several zooms and pans): coordinates are stored in image pixels (origin top-left, y
+  down) and mapped to the screen for drawing, so shapes stay on the anatomy through zoom, pan and
+  resize, and stroke widths stay constant on screen. The viewer's pointer, wheel and key handlers
+  sit on its container, so the layer handles what it needs (left button while drawing, shapes and
+  handles) and stops it, and the rest (wheel zoom, middle-drag pan, right-drag W/L, left-drag pan
+  on empty space) reaches the viewer. Tools (keyboard-operable toggle buttons): rectangle, polygon
+  (click each vertex; double-click, Enter or a click on the first vertex closes it; Backspace
+  removes the last vertex; Esc cancels), arrow (drag, then type its text) and length. Lengths and
+  areas are in mm with the DICOM pixel spacing (`SeriesDto.pixelSpacing`), in px / px² otherwise,
+  and the unit always says which (the toolbar also shows the spacing, or "Measured in px").
+  Selecting a shape shows its handles; dragging moves it (kept inside the image) or a handle
+  reshapes it; Delete removes it. Writes are optimistic, run one after another in one mutation
+  scope (an update always carries the version returned by the previous write), and a 409 restores
+  the list and reloads it. Screenshots and key images bake the visible annotations into the
+  capture with a canvas painter that draws the same screen geometry as the SVG (`scene2d.ts`).
+- **MPR annotations.** Cornerstone3D's `RectangleROITool`, `EllipticalROITool` (area, mean and
+  standard deviation, in HU on a CT) and `LengthTool` are added behind the `MprEngine` interface.
+  Not selected, they stay passive, so existing measurements remain editable by their handles. The
+  engine listens to `ANNOTATION_COMPLETED` / `ANNOTATION_MODIFIED` / `ANNOTATION_REMOVED` and
+  reports a change once the pointer is released and the statistics have been recomputed (250 ms of
+  quiet, waiting up to 2 s for an ROI's stats), never on every drag step. `annotationConverters.ts`
+  maps both ways between our geometry (LPS mm points in Cornerstone's handle order, view-plane
+  normal, view-up, slice index) and Cornerstone's annotation object, and reads the measurement from
+  its cached stats (mm / mm² only, HU only for a CT). Saved annotations are restored with
+  `setAnnotations` (the API id as annotation UID, others' locked); one drawn in the session keeps
+  Cornerstone's UID, mapped to its API id. The panel lists them; clicking one moves the crosshair
+  to its centre (which brings its slice into every view) and selects it, clicking one in a view
+  selects it in the panel. The engine removes its annotations from Cornerstone's page-wide state
+  when destroyed.
+- **Reports.** `/studies/:id/report` lists the versions (summaries from
+  `GET /studies/{id}/reports`, the selected one read with `GET /reports/{id}`). A doctor creates a
+  draft (template by input type, CXR for 2D and CT for volumes, language vi/en); the server fills it
+  from the reviewed findings and annotations. Sections are saved 1 s after the last keystroke with
+  the report's `rowVersion` (state shown: saved / unsaved / saving / conflict), edits typed during
+  a save are saved right after it, and leaving the page saves what is left. A 409 stops autosave
+  and offers to reload the server's version. Key images (at most 6) come from "Add to report" in
+  either viewer: the 2D capture with heatmaps and annotations, or the active MPR view (canvas plus
+  its SVG measurement layer); the PNG goes init → presigned PUT → complete, and the draft is
+  created first if the study has no report. Their order (up / down buttons) and captions travel in
+  the same `PUT` as the sections. The draft PDF preview needs the access token, so it is fetched
+  as a blob and opened from an object URL in a new tab (downloaded when the browser blocks the
+  tab). Technique and Findings are only filled when the draft is created: "Refill from reviewed
+  findings" saves, warns that both sections will be replaced, then has the server write them again
+  from the findings and annotations as they are now (`POST /reports/{id}/refill` with the row
+  version; Clinical information and Impression are kept). A hint suggests it when one of the
+  study's findings was reviewed after the draft was last saved (`GET /studies/{id}/findings`, the
+  query the viewer caches too). The PDF names segmented organs in the report's language with the same names as
+  the viewer (core-service `structure.*` messages, checked against `src/i18n/locales` by a test).
+  "Sign and finalize" saves, asks for confirmation and signs; the signed report is
+  read-only with "Download PDF" / "Open PDF" (a presigned link) and "Create amendment" (next
+  version, from the latest signed one). Researchers only see signed versions; technicians and
+  admins see drafts read-only. The case page shows each study's report status.
 - **Bundle.** The initial load is unchanged from slice 1 (about 1.4 MB minified, 460 kB gzip).
   Cornerstone3D (with vtk.js and the DICOM metadata libraries it imports) is one lazy chunk of
   about 3.6 MB (1 MB gzip), loaded only by a CT study; three.js with react-three-fiber is a lazy
@@ -242,7 +318,7 @@ lazy routes in `app/router.tsx`.
 
 ## Browser smoke test (Playwright)
 
-`npm run e2e` builds the app, serves it with `vite preview` and runs two specs in headless
+`npm run e2e` builds the app, serves it with `vite preview` and runs three specs in headless
 Chromium (WebGL on SwiftShader). `viewer.smoke.spec.ts` opens a CT study. The REST API and object storage are answered by `page.route`
 from an in-memory synthetic study (`e2e/fixtures/synthetic.ts`: a 96×96×64 int16 NIfTI with a
 liver box and a spleen ball, its uint8 labelmap on the same affine, one GLB per structure in LPS
@@ -253,6 +329,11 @@ moves the crosshair to its centroid and brings it into the axial view. Any page 
 error or CSP violation fails it. `inputs.smoke.spec.ts` opens the sample gallery as a researcher,
 checks a card (thumbnail, modality, source) and opens its study: a synthetic 8-bit image stack with
 an assumed spacing, which must be drawn in all three views with the window over its data range (W
-220 / L 110), no CT presets, no 3D tab and the spacing warning.
+220 / L 110), no CT presets, no 3D tab and the spacing warning. `review-report.smoke.spec.ts`
+opens a synthetic DICOM X-ray (PNG generated by `e2e/fixtures/png.ts`, pixel spacing 0.3 mm) as a
+doctor against a stateful in-memory API: it draws a rectangle and a length (checking the pixel
+geometry and the mm measurement sent), accepts an AI finding, adds the view to a new report
+(checking that the uploaded PNG contains the annotations), writes the impression, waits for the
+autosave and signs.
 `E2E_BASE_URL=http://localhost:5173 npm run e2e` runs them against the dev server instead (without
 the production CSP). Run `npm run e2e:install` once first.

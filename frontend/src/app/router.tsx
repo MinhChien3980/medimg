@@ -8,7 +8,7 @@ import AppLayout from '@/features/layout/AppLayout';
 import SamplesPage from '@/features/samples/SamplesPage';
 import NotFoundPage from '@/shared/components/NotFoundPage';
 import RouteErrorPage from '@/shared/components/RouteErrorPage';
-import { UploadWizardRoute, ViewerRoute } from './lazyPages';
+import { ReportRoute, UploadWizardRoute, ViewerRoute } from './lazyPages';
 
 export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage />, errorElement: <RouteErrorPage /> },
@@ -35,6 +35,7 @@ export const routes: RouteObject[] = [
       },
       // Lazy: keeps the canvas viewer (and later Cornerstone3D / three.js) out of the main chunk.
       { path: 'studies/:studyId', element: <ViewerRoute /> },
+      { path: 'studies/:studyId/report', element: <ReportRoute /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

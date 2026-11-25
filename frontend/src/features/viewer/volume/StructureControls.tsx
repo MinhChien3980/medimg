@@ -1,11 +1,23 @@
 import { AimOutlined, EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Empty, Slider, Space, Tooltip, Typography } from 'antd';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { FindingDto, Uuid } from '@/api/types';
 import { useStructureName } from '@/features/ai/structureNames';
+import {
+  FindingReviewActions,
+  ReviewDetails,
+  ReviewStatusTag,
+  UnreviewedFilter,
+} from '@/features/review/FindingReview';
+import { isUnreviewed } from '@/features/review/reviewModel';
 import { formatVolumeMl } from '@/shared/lib/format';
 import type { Structure, StructureStyle } from './structures';
 
 export interface StructureControlsProps {
+  studyId: Uuid;
+  /** Findings of the run (one per structure label), for the review of each structure. */
+  findings: readonly FindingDto[];
   structures: readonly Structure[];
   styles: Readonly<Record<string, StructureStyle>>;
   onChange: (label: string, patch: Partial<StructureStyle>) => void;
@@ -16,10 +28,13 @@ export interface StructureControlsProps {
 
 /**
  * Segmented structures with their volume, and the display settings shared by MPR and 3D:
- * visibility, colour, opacity. Every control is a labelled native or antd control (keyboard
- * operable); the eye toggles expose their state with `aria-pressed`.
+ * visibility, colour, opacity, plus the doctor's review of each structure. Every control is a
+ * labelled native or antd control (keyboard operable); the eye toggles expose their state with
+ * `aria-pressed`.
  */
 export function StructureControls({
+  studyId,
+  findings,
   structures,
   styles,
   onChange,
@@ -28,6 +43,8 @@ export function StructureControls({
 }: StructureControlsProps) {
   const { t, i18n } = useTranslation();
   const name = useStructureName();
+  const [unreviewedOnly, setUnreviewedOnly] = useState(false);
+  const findingOf = new Map(findings.map((f) => [f.label, f]));
 
   if (structures.length === 0) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('ai.noStructures')} />;
@@ -43,10 +60,13 @@ export function StructureControls({
           {t('viewer.structures.hideAll')}
         </Button>
       </Space>
+      <UnreviewedFilter findings={findings} checked={unreviewedOnly} onChange={setUnreviewedOnly} />
       <ul className="structures__list" aria-label={t('viewer.structures.list')}>
         {structures.map((s) => {
           const style = styles[s.label];
+          const finding = findingOf.get(s.label);
           if (!style) return null;
+          if (unreviewedOnly && (!finding || !isUnreviewed(finding))) return null;
           const display = name(s.label);
           return (
             <li key={s.label} className="structure-row" data-testid={`structure-${s.label}`}>
@@ -106,6 +126,13 @@ export function StructureControls({
                   tooltip={{ formatter: (v) => `${Math.round((v ?? 0) * 100)}%` }}
                 />
               </div>
+              {finding && (
+                <div className="structure-row__review">
+                  <ReviewStatusTag finding={finding} />
+                  <FindingReviewActions studyId={studyId} finding={finding} name={display} />
+                  <ReviewDetails finding={finding} />
+                </div>
+              )}
             </li>
           );
         })}

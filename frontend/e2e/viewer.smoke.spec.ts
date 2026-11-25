@@ -110,6 +110,9 @@ async function mockBackend(page: Page, { expireFirstVolumeUrl = false } = {}) {
     },
     [`GET /api/v1/studies/${STUDY_ID}/predictions`]: [prediction],
     [`GET /api/v1/predictions/${JOB_ID}`]: prediction,
+    // Slice 3: annotations and manual findings of the study (none here).
+    [`GET /api/v1/studies/${STUDY_ID}/annotations`]: [],
+    [`GET /api/v1/studies/${STUDY_ID}/findings`]: [],
     'GET /api/v1/models': [
       {
         id: 'm1',

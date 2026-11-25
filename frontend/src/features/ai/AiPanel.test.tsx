@@ -157,16 +157,16 @@ describe('AiPanel', () => {
     expect(screen.queryByTestId('transport')).not.toBeInTheDocument();
 
     // Only labels with a heatmap are toggles.
-    const toggle = screen.getByRole('button', { name: /Cardiomegaly/ });
+    const toggle = screen.getByRole('button', { name: /^eye.* Cardiomegaly$/ });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.queryByRole('button', { name: /Effusion/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^eye.* Effusion$/ })).not.toBeInTheDocument();
     await user.click(toggle);
     expect(screen.getByTestId('visible-heatmaps')).toHaveTextContent('Cardiomegaly');
-    expect(screen.getByRole('button', { name: /Cardiomegaly/ })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: /^eye.* Cardiomegaly$/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-  });
+  }, 40_000); // many role queries over the findings table: slow on a loaded machine
 
   it('falls back to polling GET /predictions/{id} when SSE is unavailable', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

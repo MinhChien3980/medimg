@@ -25,6 +25,12 @@ export interface ProblemDetail {
 
 // ---------- Auth ----------
 
+/** A user as shown next to what they did (review, annotation, report signature). */
+export interface UserRef {
+  id: Uuid;
+  fullName: string;
+}
+
 export type Role = 'ADMIN' | 'DOCTOR' | 'TECHNICIAN' | 'RESEARCHER';
 
 export interface UserDto {
@@ -226,6 +232,11 @@ export interface SeriesDto {
   /** Voxel spacing `[sx, sy, sz]` in mm; null for 2D. */
   spacing: Vec3 | null;
   /**
+   * 2D only: pixel spacing `[x, y]` in mm (column spacing, row spacing) of a DICOM X-ray; null for a
+   * PNG/JPG (lengths are then measured in pixels) and for volumes. Optional for older servers.
+   */
+  pixelSpacing?: [number, number] | null;
+  /**
    * True when `spacing` is the 1 mm default the server assumed (an image stack uploaded without
    * slice spacing): distances and volumes measured on it are not real. False otherwise.
    */
@@ -305,12 +316,21 @@ export type BBox = [number, number, number, number];
 export interface FindingDto {
   id: Uuid;
   label: string;
-  /** 0..1; null for a segmented structure. */
+  /** 0..1; null for a segmented structure and for a finding added by a doctor. */
   confidence: number | null;
   /** Volume of a segmented structure in millilitres; null for 2D findings. */
   volumeMl: number | null;
   bbox: BBox | null;
-  reviewStatus: 'PENDING';
+  /** `PENDING` until a doctor reviews an AI finding; a MANUAL finding is `ACCEPTED` at once. */
+  reviewStatus: ReviewStatus;
+  /** The doctor's decision; null while PENDING. */
+  review: FindingReview | null;
+  source: FindingSource;
+  /** Optimistic-locking version, sent back with `PATCH /findings/{id}/review`. */
+  version: number;
+  seriesId: Uuid;
+  /** Annotation a MANUAL finding points at, if any. */
+  annotationId: Uuid | null;
 }
 
 /** One segmented structure rendered as a mesh. */
@@ -393,4 +413,254 @@ export function isVolumeInput(inputType: InputType | null | undefined): boolean 
  */
 export function hasHounsfieldUnits(inputType: InputType, modality: string): boolean {
   return inputType !== 'IMAGE_STACK' && modality.toUpperCase() === 'CT';
+}
+
+// ---------- Finding review (slice 3) ----------
+
+export type ReviewStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'EDITED';
+export type ReviewDecision = Exclude<ReviewStatus, 'PENDING'>;
+export type FindingSource = 'AI' | 'MANUAL';
+
+/** Limits shared with the server. */
+export const FINDING_LABEL_MAX = 100;
+export const FINDING_NOTE_MAX = 1000;
+
+export interface FindingReview {
+  status: ReviewDecision;
+  /** Corrected label (EDITED only). */
+  label: string | null;
+  note: string | null;
+  reviewedBy: UserRef;
+  reviewedAt: IsoDateTime;
+}
+
+/** `PATCH /findings/{id}/review`; `label` is required for EDITED. 409 when `version` is stale. */
+export interface ReviewFindingRequest {
+  status: ReviewDecision;
+  label?: string;
+  note?: string;
+  version: number;
+}
+
+/** `POST /studies/{id}/findings`: a MANUAL finding, ACCEPTED at once. */
+export interface CreateFindingRequest {
+  seriesId: Uuid;
+  label: string;
+  note?: string;
+  annotationId?: Uuid;
+}
+
+// ---------- Annotations (slice 3) ----------
+
+/** `[x, y]` in image pixels: origin at the top-left corner, x to the right, y down. */
+export type Point2 = [number, number];
+
+export type Annotation2DKind = 'RECTANGLE' | 'POLYGON' | 'ARROW' | 'LENGTH';
+export type VolumeAnnotationKind = 'RECTANGLE_ROI' | 'ELLIPSE_ROI' | 'LENGTH';
+/** `LENGTH` exists in both spaces: the series (2D image or volume) tells which geometry it has. */
+export type AnnotationKind = Annotation2DKind | VolumeAnnotationKind;
+
+export interface RectangleGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PolygonGeometry {
+  /** 3..200 points. */
+  points: Point2[];
+}
+
+export interface ArrowGeometry {
+  /** Tail. */
+  from: Point2;
+  /** Head (the point being shown). */
+  to: Point2;
+  text: string;
+}
+
+export interface LineGeometry {
+  from: Point2;
+  to: Point2;
+}
+
+/**
+ * Volume annotation in LPS millimetres (the world space of the MPR viewer), with the plane it was
+ * drawn on. `points` keep Cornerstone3D's handle order: rectangle = 4 corners (top-left,
+ * top-right, bottom-left, bottom-right), ellipse = ends of its axes (bottom, top, left, right),
+ * length = its 2 ends.
+ */
+export interface VolumeGeometry {
+  points: Vec3[];
+  viewPlaneNormal: Vec3;
+  viewUp: Vec3;
+  sliceIndex?: number | null;
+}
+
+export type AnnotationGeometry =
+  RectangleGeometry | PolygonGeometry | ArrowGeometry | LineGeometry | VolumeGeometry;
+
+/**
+ * Computed by the client, checked by the server (finite, positive). `lengthPx` / `areaPx2` are used
+ * for a 2D image without pixel spacing (PNG/JPG); mean / std are in HU (CT only).
+ */
+export interface Measurement {
+  lengthMm?: number;
+  areaMm2?: number;
+  lengthPx?: number;
+  areaPx2?: number;
+  meanHu?: number;
+  stdHu?: number;
+}
+
+export const ANNOTATION_LABEL_MAX = 100;
+export const ANNOTATION_NOTE_MAX = 1000;
+
+export interface AnnotationDto {
+  id: Uuid;
+  studyId: Uuid;
+  seriesId: Uuid;
+  author: UserRef;
+  kind: AnnotationKind;
+  geometry: AnnotationGeometry;
+  label: string | null;
+  note: string | null;
+  measurement: Measurement | null;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  /** Optimistic-locking version, sent back with `PUT /annotations/{id}`. */
+  version: number;
+}
+
+export interface CreateAnnotationRequest {
+  seriesId: Uuid;
+  kind: AnnotationKind;
+  geometry: AnnotationGeometry;
+  label?: string | null;
+  note?: string | null;
+  measurement?: Measurement | null;
+}
+
+/** `PUT /annotations/{id}` (author only); 409 when `version` is stale. */
+export interface UpdateAnnotationRequest {
+  geometry: AnnotationGeometry;
+  label: string | null;
+  note: string | null;
+  measurement: Measurement | null;
+  version: number;
+}
+
+// ---------- Reports (slice 3) ----------
+
+export type ReportStatus = 'DRAFT' | 'FINAL';
+/** CXR for a 2D study, CT for a volume. */
+export type ReportTemplate = 'CXR' | 'CT';
+export type ReportLanguage = 'vi' | 'en';
+
+export const KEY_IMAGE_MAX_COUNT = 6;
+export const KEY_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const KEY_IMAGE_CAPTION_MAX = 200;
+/** Per-section caps, the same as core-service's validation and columns. */
+export const REPORT_SECTION_MAX = {
+  clinicalInfo: 2000,
+  technique: 4000,
+  findingsText: 10000,
+  impression: 4000,
+} as const;
+
+export interface ReportKeyImageDto {
+  id: Uuid;
+  caption: string | null;
+  /** 0-based order in the report. */
+  position: number;
+  /** False until `complete` succeeded (a report cannot be signed with such an image). */
+  uploaded: boolean;
+  /** Presigned GET URL of the PNG (valid for 15 minutes); null while not uploaded. */
+  url: string | null;
+}
+
+export interface ReportDto {
+  id: Uuid;
+  studyId: Uuid;
+  /** 1, 2, … – an amendment is the next version. */
+  version: number;
+  status: ReportStatus;
+  template: ReportTemplate;
+  language: ReportLanguage;
+  clinicalInfo: string | null;
+  technique: string | null;
+  findingsText: string | null;
+  impression: string | null;
+  author: UserRef;
+  signedBy: UserRef | null;
+  signedAt: IsoDateTime | null;
+  /** The FINAL report this one amends (its previous version); null for version 1. */
+  amendsReportId: Uuid | null;
+  /** Key images ordered by `position`. */
+  keyImages: ReportKeyImageDto[];
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+  /** Optimistic-locking version of the report row (`PUT`, `finalize`); 409 when stale. */
+  rowVersion: number;
+}
+
+/**
+ * Item of `GET /studies/{id}/reports` (latest first). The server may send only the summary fields;
+ * the full report comes from `GET /reports/{id}`.
+ */
+export type ReportSummaryDto = Pick<ReportDto, 'id' | 'version' | 'status'> & Partial<ReportDto>;
+
+export interface CreateReportRequest {
+  /** Defaults by input type on the server (2D → CXR, volume → CT). */
+  template?: ReportTemplate;
+  language: ReportLanguage;
+}
+
+/** Caption and order of the key images, sent with a draft's sections. */
+export interface KeyImageOrderItem {
+  id: Uuid;
+  /** null keeps the caption, blank clears it. */
+  caption: string | null;
+}
+
+/** `PUT /reports/{id}` (DRAFT only; the language is chosen at creation). */
+export interface UpdateReportRequest {
+  clinicalInfo: string;
+  technique: string;
+  findingsText: string;
+  impression: string;
+  /** Every key image once, in the new order (omitted: unchanged). */
+  keyImages?: KeyImageOrderItem[];
+  rowVersion: number;
+}
+
+export interface FinalizeReportRequest {
+  rowVersion: number;
+}
+
+/** `POST /reports/{id}/refill` on a DRAFT: 409 when `rowVersion` is stale or the report is FINAL. */
+export interface RefillReportRequest {
+  rowVersion: number;
+}
+
+export interface InitKeyImageRequest {
+  contentType: 'image/png';
+  /** Bytes, at most 5 MB; the PUT must send exactly this many. */
+  size: number;
+  caption?: string;
+}
+
+export interface InitKeyImageResponse {
+  imageId: Uuid;
+  /** Presigned PUT URL (same origin); the PNG is sent with `Content-Type: image/png`. */
+  putUrl: string;
+  expiresAt: IsoDateTime;
+}
+
+/** `GET /reports/{id}/pdf` of a FINAL report. */
+export interface PdfLinkDto {
+  /** Presigned GET URL of `report.pdf` (same origin). */
+  url: string;
+  expiresAt: IsoDateTime;
 }

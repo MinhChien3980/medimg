@@ -1,5 +1,7 @@
 import type {
+  AnnotationDto,
   FindingDto,
+  ReportDto,
   SampleCaseDto,
   MeshArtifact,
   ModelDto,
@@ -23,6 +25,13 @@ export const admin: UserDto = {
   username: 'admin',
   fullName: 'Demo Admin',
   roles: ['ADMIN'],
+};
+
+export const technician: UserDto = {
+  id: '00000000-0000-4000-8000-000000000003',
+  username: 'tech',
+  fullName: 'Demo Technician',
+  roles: ['TECHNICIAN'],
 };
 
 export const researcher: UserDto = {
@@ -82,6 +91,24 @@ export const model: ModelDto = {
 
 export const JOB_ID = '55555555-5555-4555-8555-555555555555';
 
+/** A PENDING AI finding of the 2D study's run. */
+export function aiFinding(overrides: Partial<FindingDto> = {}): FindingDto {
+  return {
+    id: 'f0',
+    label: 'Finding',
+    confidence: 0.5,
+    volumeMl: null,
+    bbox: null,
+    reviewStatus: 'PENDING',
+    review: null,
+    source: 'AI',
+    version: 0,
+    seriesId: study.series[0]?.id ?? '',
+    annotationId: null,
+    ...overrides,
+  };
+}
+
 export function prediction(overrides: Partial<PredictionDto> = {}): PredictionDto {
   return {
     jobId: JOB_ID,
@@ -121,7 +148,7 @@ export const donePrediction = prediction({
 });
 
 function finding(id: string, label: string, confidence: number): FindingDto {
-  return { id, label, confidence, volumeMl: null, bbox: null, reviewStatus: 'PENDING' };
+  return aiFinding({ id, label, confidence });
 }
 
 // ---------- CT volume (slice 2a) ----------
@@ -192,14 +219,15 @@ export const segPrediction = prediction({
   inferenceMs: 95_000,
   finishedAt: '2026-11-25T08:12:00Z',
   params: {},
-  findings: segMeshes.map((m, i) => ({
-    id: `seg-${i}`,
-    label: m.label,
-    confidence: null,
-    volumeMl: m.volumeMl,
-    bbox: null,
-    reviewStatus: 'PENDING',
-  })),
+  findings: segMeshes.map((m, i) =>
+    aiFinding({
+      id: `seg-${i}`,
+      label: m.label,
+      confidence: null,
+      volumeMl: m.volumeMl,
+      seriesId: ctStudy.series[0]?.id ?? '',
+    }),
+  ),
   artifacts: {
     heatmaps: {},
     segmentation: `/medimg/predictions/${SEG_JOB_ID}/1/segmentation.nii.gz?X-Amz-Signature=abc`,
@@ -295,3 +323,59 @@ export const sampleCases: SampleCaseDto[] = [
     ],
   },
 ];
+
+// ---------- Slice 3: annotations, reports ----------
+
+/** A 2D rectangle on the X-ray, drawn by the doctor. */
+export function annotation(overrides: Partial<AnnotationDto> = {}): AnnotationDto {
+  return {
+    id: 'ann-1',
+    studyId: study.id,
+    seriesId: study.series[0]?.id ?? '',
+    author: { id: doctor.id, fullName: doctor.fullName },
+    kind: 'RECTANGLE',
+    geometry: { x: 100, y: 120, width: 200, height: 150 },
+    label: 'Nodule',
+    note: null,
+    measurement: { areaPx2: 30000 },
+    createdAt: '2026-11-25T09:00:00Z',
+    updatedAt: '2026-11-25T09:00:00Z',
+    version: 0,
+    ...overrides,
+  };
+}
+
+/** A draft report of the 2D study, version 1. */
+export function report(overrides: Partial<ReportDto> = {}): ReportDto {
+  return {
+    id: 'rep-1',
+    studyId: study.id,
+    version: 1,
+    status: 'DRAFT',
+    template: 'CXR',
+    language: 'en',
+    clinicalInfo: 'Cough for two weeks.',
+    technique: 'Chest X-ray, PA view.',
+    findingsText: '- Cardiomegaly (AI, 87%), accepted.',
+    impression: '',
+    author: { id: doctor.id, fullName: doctor.fullName },
+    signedBy: null,
+    signedAt: null,
+    amendsReportId: null,
+    keyImages: [],
+    createdAt: '2026-11-25T09:30:00Z',
+    updatedAt: '2026-11-25T09:30:00Z',
+    rowVersion: 0,
+    ...overrides,
+  };
+}
+
+export function finalReport(overrides: Partial<ReportDto> = {}): ReportDto {
+  return report({
+    status: 'FINAL',
+    impression: 'Cardiomegaly.',
+    signedBy: { id: doctor.id, fullName: doctor.fullName },
+    signedAt: '2026-11-25T10:00:00Z',
+    ...overrides,
+  });
+}

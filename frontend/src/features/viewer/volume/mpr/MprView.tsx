@@ -1,19 +1,22 @@
 import {
   AimOutlined,
+  BorderOutlined,
   BulbOutlined,
+  ColumnWidthOutlined,
   DragOutlined,
   ExpandOutlined,
   ReloadOutlined,
   WarningOutlined,
   ZoomInOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Segmented, Slider, Spin, Tooltip, Typography } from 'antd';
+import { Alert, Button, Segmented, Slider, Space, Spin, Tooltip, Typography } from 'antd';
 import {
   useEffect,
   useEffectEvent,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Vec3 } from '@/api/types';
@@ -29,7 +32,11 @@ import {
 import { useVolumeBackends } from '../backends';
 import { artifactKey } from '../structures';
 import {
+  MPR_ANNOTATION_TOOLS,
   MPR_ORIENTATIONS,
+  type MprAnnotationChange,
+  type MprAnnotationInput,
+  type MprAnnotationTool,
   type MprEngine,
   type MprLabelmap,
   type MprOrientation,
@@ -57,7 +64,36 @@ export interface MprViewProps {
   focus: FocusRequest | null;
   /** The volume failed to load: the caller should fetch a fresh presigned URL. */
   onVolumeError: () => void;
+  /** Offers the measurement tools (rectangle / ellipse ROI, length). */
+  canAnnotate?: boolean;
+  /** Measurements to show (memoised by the caller). */
+  annotations?: readonly MprAnnotationInput[];
+  /** Engine uid of the highlighted measurement. */
+  selectedAnnotation?: string | null;
+  onAnnotationChange?: (change: MprAnnotationChange) => void;
+  onAnnotationRemove?: (uid: string) => void;
+  onAnnotationSelect?: (uid: string | null) => void;
+  /** Delete / Backspace in a view: delete the highlighted measurement (when allowed). */
+  onDeleteSelected?: () => void;
+  /** More toolbar buttons (e.g. "Add to report"), given a capture of the active view. */
+  toolbarExtra?: (context: MprToolbarContext) => ReactNode;
 }
+
+export interface MprToolbarContext {
+  /** View last clicked or focused. */
+  active: MprOrientation;
+  /** PNG of the active view as displayed (image, labelmap, measurements). */
+  capture: () => Promise<Blob | null>;
+  ready: boolean;
+}
+
+const NO_ANNOTATIONS: readonly MprAnnotationInput[] = [];
+
+const ANNOTATION_TOOL_ICONS: Record<MprAnnotationTool, ReactNode> = {
+  rectangleRoi: <BorderOutlined />,
+  ellipseRoi: <span className="tool-glyph tool-glyph--ellipse" aria-hidden />,
+  length: <ColumnWidthOutlined />,
+};
 
 type Status = 'loading' | 'ready' | 'error' | 'unsupported';
 type OverlayState = { key: string | null; state: 'ready' | 'error' };
@@ -86,6 +122,14 @@ export function MprView({
   notice,
   focus,
   onVolumeError,
+  canAnnotate = false,
+  annotations = NO_ANNOTATIONS,
+  selectedAnnotation = null,
+  onAnnotationChange,
+  onAnnotationRemove,
+  onAnnotationSelect,
+  onDeleteSelected,
+  toolbarExtra,
 }: MprViewProps) {
   const { t, i18n } = useTranslation();
   const { loadMprEngine } = useVolumeBackends();
@@ -107,6 +151,7 @@ export function MprView({
   const defaultWindow = hounsfield ? DEFAULT_CT_WINDOW : dataWindow;
   const [opacity, setOpacity] = useState(0.5);
   const [crosshair, setCrosshair] = useState<Vec3 | null>(null);
+  const [active, setActive] = useState<MprOrientation>('axial');
 
   const ready = status === 'ready';
   const labelmapKey = labelmap ? artifactKey(labelmap.url) : null;
@@ -119,6 +164,11 @@ export function MprView({
   const handleCrosshair = useEffectEvent((point: Vec3) => setCrosshair(point));
   const handleWindow = useEffectEvent((next: CtWindow) => setCtWindow(next));
   const handleVolumeError = useEffectEvent(() => onVolumeError());
+  const handleAnnotationChange = useEffectEvent((change: MprAnnotationChange) =>
+    onAnnotationChange?.(change),
+  );
+  const handleAnnotationRemove = useEffectEvent((uid: string) => onAnnotationRemove?.(uid));
+  const handleAnnotationSelect = useEffectEvent((uid: string | null) => onAnnotationSelect?.(uid));
 
   // One engine per mount.
   useEffect(() => {
@@ -136,6 +186,9 @@ export function MprView({
           {
             onCrosshairChange: (point) => handleCrosshair(point),
             onWindowChange: (next) => handleWindow(next),
+            onAnnotationChange: (change) => handleAnnotationChange(change),
+            onAnnotationRemove: (uid) => handleAnnotationRemove(uid),
+            onAnnotationSelect: (uid) => handleAnnotationSelect(uid),
           },
         );
         setEngine(created);
@@ -205,12 +258,25 @@ export function MprView({
   }, [engine, ctWindow]);
 
   useEffect(() => {
-    engine?.setTool(tool);
-  }, [engine, tool]);
-
-  useEffect(() => {
     if (engine && ready && focus) engine.jumpTo(focus.point);
   }, [engine, ready, focus]);
+
+  useEffect(() => {
+    engine?.setAnnotations(annotations);
+  }, [engine, annotations]);
+
+  useEffect(() => {
+    if (engine && ready) engine.selectAnnotation(selectedAnnotation);
+  }, [engine, ready, selectedAnnotation]);
+
+  // A measurement tool without the right to annotate (e.g. after the role changed) falls back.
+  const effectiveTool: MprTool =
+    !canAnnotate && (MPR_ANNOTATION_TOOLS as readonly string[]).includes(tool)
+      ? 'crosshairs'
+      : tool;
+  useEffect(() => {
+    engine?.setTool(effectiveTool);
+  }, [engine, effectiveTool]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -226,6 +292,11 @@ export function MprView({
   };
 
   const onViewportKey = (orientation: MprOrientation) => (e: ReactKeyboardEvent) => {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && onDeleteSelected && selectedAnnotation) {
+      e.preventDefault();
+      onDeleteSelected();
+      return;
+    }
     const delta = SCROLL_KEYS[e.key];
     if (delta === undefined || !engine || !ready) return;
     e.preventDefault();
@@ -246,7 +317,7 @@ export function MprView({
     <div className="mpr-view">
       <div className="viewer-toolbar" role="toolbar" aria-label={t('viewer.mpr.toolbar')}>
         <Segmented<MprTool>
-          value={tool}
+          value={effectiveTool}
           onChange={setTool}
           options={[
             { value: 'crosshairs', icon: <AimOutlined />, label: t('viewer.mpr.crosshairs') },
@@ -255,6 +326,21 @@ export function MprView({
             { value: 'zoom', icon: <ZoomInOutlined />, label: t('viewer.tools.zoom') },
           ]}
         />
+        {canAnnotate && (
+          <Space size={4} role="group" aria-label={t('annotations.tools')}>
+            {MPR_ANNOTATION_TOOLS.map((id) => (
+              <Tooltip key={id} title={t(`viewer.mpr.measureHints.${id}`)}>
+                <Button
+                  icon={ANNOTATION_TOOL_ICONS[id]}
+                  type={effectiveTool === id ? 'primary' : 'default'}
+                  aria-pressed={effectiveTool === id}
+                  aria-label={t(`viewer.mpr.measure.${id}`)}
+                  onClick={() => setTool(effectiveTool === id ? 'crosshairs' : id)}
+                />
+              </Tooltip>
+            ))}
+          </Space>
+        )}
         {hounsfield && (
           <Segmented<CtPresetId | 'custom'>
             aria-label={t('viewer.mpr.presets')}
@@ -302,6 +388,11 @@ export function MprView({
             />
           </div>
         )}
+        {toolbarExtra?.({
+          active,
+          ready,
+          capture: () => engine?.capture(active) ?? Promise.resolve(null),
+        })}
         <span className="viewer-toolbar__info" data-testid="mpr-crosshair" aria-live="polite">
           {crosshair &&
             t('viewer.mpr.crosshairAt', { point: formatPoint(crosshair, i18n.language) })}
@@ -320,11 +411,17 @@ export function MprView({
 
       <div className="mpr-view__grid" ref={containerRef}>
         {MPR_ORIENTATIONS.map((o) => (
-          <div key={o} className={`mpr-view__cell mpr-view__cell--${o}`}>
+          <div
+            key={o}
+            className={`mpr-view__cell mpr-view__cell--${o}${active === o ? ' mpr-view__cell--active' : ''}`}
+            onPointerDownCapture={() => setActive(o)}
+            onFocusCapture={() => setActive(o)}
+          >
             <div
               ref={refs[o]}
               className="mpr-view__viewport"
               data-testid={`mpr-${o}`}
+              data-active={active === o}
               role="img"
               tabIndex={0}
               aria-label={t(`viewer.mpr.views.${o}`)}
@@ -364,7 +461,11 @@ export function MprView({
           </div>
         )}
       </div>
-      <Typography.Text className="viewer-page__hint">{t('viewer.mpr.hint')}</Typography.Text>
+      <Typography.Text className="viewer-page__hint">
+        {(MPR_ANNOTATION_TOOLS as readonly string[]).includes(effectiveTool)
+          ? t('viewer.mpr.measureHint')
+          : t('viewer.mpr.hint')}
+      </Typography.Text>
     </div>
   );
 }

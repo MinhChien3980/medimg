@@ -11,6 +11,7 @@ import { isVolumeInput, type PredictionDto, type StudyDto } from '@/api/types';
 import { findingValue, isSegmentationResult, sortFindings } from '@/features/ai/findings';
 import { PredictionStatusTag } from '@/features/ai/PredictionStatusTag';
 import { useCan } from '@/features/auth/permissions';
+import { StudyReportStatus } from '@/features/reports/StudyReportStatus';
 import { CaseSampleCard } from '@/features/samples/CaseSampleCard';
 import { PresignedThumbnail } from '@/shared/components/PresignedThumbnail';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
@@ -174,9 +175,12 @@ function StudyCard({ study, onThumbError }: { study: StudyDto; onThumbError: () 
               {formatDateTime(study.createdAt, i18n.language)}
             </Typography.Text>
           </div>
-          <Button size="small" onClick={() => void navigate(viewerPath)}>
-            {t('caseDetail.openViewer')}
-          </Button>
+          <div className="study-card__actions">
+            <Button size="small" onClick={() => void navigate(viewerPath)}>
+              {t('caseDetail.openViewer')}
+            </Button>
+            <StudyReportStatus studyId={study.id} />
+          </div>
           <Typography.Text strong style={{ display: 'block', margin: '12px 0 4px' }}>
             {t('caseDetail.aiHistory')}
           </Typography.Text>

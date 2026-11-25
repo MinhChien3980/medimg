@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { errorMessage } from '@/api/problem';
 import type { CreatePredictionResponse, InputType, PredictionDto, Uuid } from '@/api/types';
 import { useCan } from '@/features/auth/permissions';
+import { ManualFindings, type SelectedAnnotation } from '@/features/review/ManualFindings';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { formatDateTime } from '@/shared/lib/format';
 import { FindingsTable } from './FindingsTable';
@@ -49,6 +50,10 @@ export interface AiPanelProps {
    * Defaults to a read-only table of structures and volumes.
    */
   renderSegmentation?: (prediction: PredictionDto) => ReactNode;
+  /** Annotation selected in the viewer, offered as the location of a new manual finding. */
+  selectedAnnotation?: SelectedAnnotation | null;
+  /** Shows the annotation a manual finding points at. */
+  onShowAnnotation?: (annotationId: Uuid) => void;
 }
 
 const NO_HEATMAPS: readonly string[] = [];
@@ -63,6 +68,8 @@ export function AiPanel({
   visibleHeatmaps = NO_HEATMAPS,
   onToggleHeatmap = ignoreHeatmap,
   renderSegmentation,
+  selectedAnnotation,
+  onShowAnnotation,
 }: AiPanelProps) {
   const { t } = useTranslation();
   const can = useCan();
@@ -93,6 +100,7 @@ export function AiPanel({
       <div className="ai-panel__section ai-panel__section--grow">
         {jobId ? (
           <RunDetails
+            studyId={studyId}
             jobId={jobId}
             queuePosition={queueInfo?.jobId === jobId ? queueInfo.position : null}
             canManage={can('manageJob')}
@@ -103,6 +111,15 @@ export function AiPanel({
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('ai.selectRun')} />
         )}
+      </div>
+
+      <div className="ai-panel__section">
+        <ManualFindings
+          studyId={studyId}
+          seriesId={seriesId}
+          selectedAnnotation={selectedAnnotation}
+          onShowAnnotation={onShowAnnotation}
+        />
       </div>
 
       <div className="ai-panel__section">
@@ -218,6 +235,7 @@ function RunControls({ studyId, inputType, seriesId, onStarted }: RunControlsPro
 }
 
 interface RunDetailsProps {
+  studyId: Uuid;
   jobId: Uuid;
   queuePosition: number | null;
   canManage: boolean;
@@ -227,6 +245,7 @@ interface RunDetailsProps {
 }
 
 function RunDetails({
+  studyId,
   jobId,
   queuePosition,
   canManage,
@@ -329,7 +348,11 @@ function RunDetails({
           {renderSegmentation ? (
             renderSegmentation(p)
           ) : (
-            <StructuresTable findings={p.findings} meshes={p.artifacts?.meshes ?? []} />
+            <StructuresTable
+              studyId={studyId}
+              findings={p.findings}
+              meshes={p.artifacts?.meshes ?? []}
+            />
           )}
           <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
             {t('ai.disclaimer')}
@@ -348,6 +371,7 @@ function RunDetails({
             )}
           </div>
           <FindingsTable
+            studyId={studyId}
             findings={p.findings}
             threshold={runThreshold(p)}
             heatmaps={p.artifacts?.heatmaps ?? {}}

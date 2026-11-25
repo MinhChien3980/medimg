@@ -36,6 +36,13 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 
 window.scrollTo = () => undefined;
 
+// jsdom has no object URLs (used for previews of captured images and PDFs).
+if (typeof URL.createObjectURL !== 'function') {
+  let next = 0;
+  URL.createObjectURL = () => `blob:jsdom/${(next += 1)}`;
+  URL.revokeObjectURL = () => undefined;
+}
+
 // jsdom does not implement pseudo-element styles (antd asks for them); ignore the argument.
 const originalGetComputedStyle = window.getComputedStyle.bind(window);
 window.getComputedStyle = (element: Element) => originalGetComputedStyle(element);

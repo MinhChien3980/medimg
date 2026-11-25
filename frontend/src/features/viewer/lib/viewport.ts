@@ -47,6 +47,11 @@ export function screenToImage(vp: Viewport, p: Point): Point {
   return { x: (p.x - vp.offsetX) / vp.scale, y: (p.y - vp.offsetY) / vp.scale };
 }
 
+/** Inverse of `screenToImage`: image pixels → screen (CSS) pixels of the viewer. */
+export function imageToScreen(vp: Viewport, p: Point): Point {
+  return { x: p.x * vp.scale + vp.offsetX, y: p.y * vp.scale + vp.offsetY };
+}
+
 export function panBy(vp: Viewport, dx: number, dy: number): Viewport {
   return { ...vp, offsetX: vp.offsetX + dx, offsetY: vp.offsetY + dy };
 }

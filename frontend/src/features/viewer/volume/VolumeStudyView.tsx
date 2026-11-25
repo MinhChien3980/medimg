@@ -1,4 +1,4 @@
-import { Alert, Empty, Tabs, Tag, Tooltip } from 'antd';
+import { Alert, Badge, Empty, Tabs, Tag, Tooltip } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { hasHounsfieldUnits, type PredictionDto, type SeriesDto } from '@/api/types';
@@ -6,6 +6,15 @@ import { AiPanel } from '@/features/ai/AiPanel';
 import { isSegmentationResult } from '@/features/ai/findings';
 import { useModels } from '@/features/ai/hooks';
 import { StructuresTable } from '@/features/ai/StructuresTable';
+import { AnnotationsPanel } from '@/features/annotations/AnnotationsPanel';
+import {
+  useVolumeAnnotations,
+  type VolumeAnnotation,
+} from '@/features/annotations/useVolumeAnnotations';
+import { useCan } from '@/features/auth/permissions';
+import { AddToReportButton, ReportLink } from '@/features/reports/AddToReport';
+import { ProblemAlert } from '@/shared/components/ProblemAlert';
+import { formatPoint } from '@/shared/lib/format';
 import { SeriesSidebar } from '../components/SeriesSidebar';
 import type { StudyViewProps } from '../ImageStudyView';
 import { useStudyRun } from '../useStudyRun';
@@ -23,6 +32,7 @@ import {
 } from './structures';
 
 export type VolumeTab = 'mpr' | '3d';
+type SideTab = 'ai' | 'annotations';
 
 interface StyleState {
   jobId: string | null;
@@ -47,9 +57,11 @@ function segmentationOf(run: PredictionDto | undefined, series: SeriesDto | unde
  * point is passed through unchanged.
  */
 export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const can = useCan();
   const [seriesId, setSeriesId] = useState<string | null>(null);
   const [tab, setTab] = useState<VolumeTab>('mpr');
+  const [sideTab, setSideTab] = useState<SideTab>('ai');
   const [focus, setFocus] = useState<FocusRequest | null>(null);
   const [styleState, setStyleState] = useState<StyleState>({ jobId: null, styles: {} });
   const { jobId, selectJob, prediction } = useStudyRun(study.id);
@@ -57,6 +69,7 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
 
   const series = study.series.find((s) => s.id === seriesId) ?? study.series[0];
   const hounsfield = hasHounsfieldUnits(study.inputType, series?.modality ?? study.modality);
+  const notes = useVolumeAnnotations(study.id, series, hounsfield);
   const run = segmentationOf(prediction.data, series);
   const labelOrder = run ? findLabelOrder(models.data, run) : null;
   const structures = useMemo(
@@ -115,12 +128,27 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
     [structures],
   );
 
+  /** Shows a measurement: its slice on the MPR (crosshair on its centre), highlighted. */
+  const locateAnnotation = (annotation: VolumeAnnotation) => {
+    notes.select(annotation.dto.id);
+    setFocus((prev) => ({ point: notes.centerOf(annotation), seq: (prev?.seq ?? 0) + 1 }));
+    setTab('mpr');
+  };
+
+  const showAnnotation = (id: string) => {
+    const annotation = notes.annotations.find((a) => a.dto.id === id);
+    if (annotation) locateAnnotation(annotation);
+    setSideTab('annotations');
+  };
+
   const show3d = hounsfield || structures.length > 0;
   const activeTab: VolumeTab = show3d ? tab : 'mpr';
 
   const renderSegmentation = (p: PredictionDto) =>
     p.jobId === run?.jobId ? (
       <StructureControls
+        studyId={study.id}
+        findings={p.findings}
         structures={structures}
         styles={styles}
         onChange={(label, patch) => changeStyles((s) => (s.label === label ? patch : null))}
@@ -128,7 +156,11 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
         onLocate={locate}
       />
     ) : (
-      <StructuresTable findings={p.findings} meshes={p.artifacts?.meshes ?? []} />
+      <StructuresTable
+        studyId={study.id}
+        findings={p.findings}
+        meshes={p.artifacts?.meshes ?? []}
+      />
     );
 
   return (
@@ -183,6 +215,37 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
                   notice={notice}
                   focus={focus}
                   onVolumeError={() => refreshBudget.spend(refetchStudy)}
+                  canAnnotate={can('annotate')}
+                  annotations={notes.inputs}
+                  selectedAnnotation={notes.selectedUid}
+                  onAnnotationChange={notes.onEngineChange}
+                  onAnnotationRemove={notes.onEngineRemove}
+                  onAnnotationSelect={(uid) => {
+                    notes.selectUid(uid);
+                    if (uid) setSideTab('annotations');
+                  }}
+                  onDeleteSelected={() => {
+                    if (notes.selected && notes.canEdit(notes.selected.dto)) {
+                      notes.remove(notes.selected.dto.id);
+                    }
+                  }}
+                  toolbarExtra={({ active, capture, ready }) => (
+                    <>
+                      <AddToReportButton
+                        studyId={study.id}
+                        capture={capture}
+                        disabled={!ready}
+                        defaultCaption={[
+                          `${study.modality} ${study.bodyPart}`,
+                          t(`viewer.mpr.views.${active}`),
+                          notes.selected?.name ?? '',
+                        ]
+                          .filter(Boolean)
+                          .join(' – ')}
+                      />
+                      <ReportLink studyId={study.id} />
+                    </>
+                  )}
                 />
               ) : (
                 <Empty description={t('viewer.noSeries')} />
@@ -212,13 +275,76 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
       </section>
 
       <aside className="viewer-page__ai">
-        <AiPanel
-          studyId={study.id}
-          inputType={study.inputType}
-          seriesId={series?.id ?? null}
-          jobId={jobId}
-          onSelectJob={selectJob}
-          renderSegmentation={renderSegmentation}
+        <Tabs
+          className="side-tabs"
+          activeKey={sideTab}
+          onChange={(key) => setSideTab(key as SideTab)}
+          items={[
+            {
+              key: 'ai',
+              label: t('ai.title'),
+              children: (
+                <AiPanel
+                  studyId={study.id}
+                  inputType={study.inputType}
+                  seriesId={series?.id ?? null}
+                  jobId={jobId}
+                  onSelectJob={selectJob}
+                  renderSegmentation={renderSegmentation}
+                  selectedAnnotation={
+                    notes.selected ? { id: notes.selected.dto.id, name: notes.selected.name } : null
+                  }
+                  onShowAnnotation={showAnnotation}
+                />
+              ),
+            },
+            {
+              key: 'annotations',
+              label: (
+                <span>
+                  {t('annotations.title')}{' '}
+                  <Badge count={notes.annotations.length} showZero size="small" color="#5b6b78" />
+                </span>
+              ),
+              children: (
+                <div className="side-tabs__pane">
+                  {notes.query.isError && (
+                    <ProblemAlert
+                      error={notes.query.error}
+                      onRetry={() => void notes.query.refetch()}
+                    />
+                  )}
+                  {!hounsfield && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 8 }}
+                      title={t('annotations.noHu')}
+                    />
+                  )}
+                  <AnnotationsPanel
+                    annotations={notes.annotations.map((a) => a.dto)}
+                    selectedId={notes.selectedId}
+                    onSelect={notes.select}
+                    onLocate={(dto) => {
+                      const annotation = notes.annotations.find((a) => a.dto.id === dto.id);
+                      if (annotation) locateAnnotation(annotation);
+                    }}
+                    canEdit={notes.canEdit}
+                    onUpdate={notes.update}
+                    onDelete={notes.remove}
+                  />
+                  {notes.selected && (
+                    <p className="annotation-list__where">
+                      {t('annotations.centre', {
+                        point: formatPoint(notes.centerOf(notes.selected), i18n.language),
+                      })}
+                    </p>
+                  )}
+                </div>
+              ),
+            },
+          ]}
         />
       </aside>
     </div>

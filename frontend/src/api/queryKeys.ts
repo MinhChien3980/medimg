@@ -17,6 +17,12 @@ export const queryKeys = {
   studies: {
     detail: (id: Uuid) => ['studies', 'detail', id] as const,
     predictions: (id: Uuid) => ['studies', 'predictions', id] as const,
+    findings: (id: Uuid) => ['studies', 'findings', id] as const,
+    annotations: (id: Uuid) => ['studies', 'annotations', id] as const,
+    reports: (id: Uuid) => ['studies', 'reports', id] as const,
+  },
+  reports: {
+    detail: (id: Uuid) => ['reports', id] as const,
   },
   models: {
     list: (inputType: InputType) => ['models', inputType] as const,

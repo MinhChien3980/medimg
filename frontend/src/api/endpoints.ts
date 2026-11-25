@@ -1,10 +1,19 @@
 import axios from 'axios';
 import { authHttp, http } from './http';
 import type {
+  AnnotationDto,
   CompleteUploadRequest,
+  CreateAnnotationRequest,
+  CreateFindingRequest,
   CreatePatientRequest,
   CreatePredictionRequest,
   CreatePredictionResponse,
+  CreateReportRequest,
+  FinalizeReportRequest,
+  RefillReportRequest,
+  FindingDto,
+  InitKeyImageRequest,
+  InitKeyImageResponse,
   InitUploadRequest,
   InitUploadResponse,
   InputType,
@@ -14,11 +23,18 @@ import type {
   Page,
   PatientDto,
   PatientQuery,
+  PdfLinkDto,
   PredictionDto,
+  ReportDto,
+  ReportSummaryDto,
+  ReviewFindingRequest,
+  ReviewStatus,
   SampleCaseDto,
   StudyDto,
   TokenResponse,
+  UpdateAnnotationRequest,
   UpdatePatientRequest,
+  UpdateReportRequest,
   UploadDto,
   UserDto,
   Uuid,
@@ -130,4 +146,71 @@ export const predictionsApi = {
     http.post<PredictionDto>(`/predictions/${jobId}/retry`).then((r) => r.data),
   cancel: (jobId: Uuid) =>
     http.post<PredictionDto>(`/predictions/${jobId}/cancel`).then((r) => r.data),
+};
+
+// ---------- Findings (review, manual findings) ----------
+
+export const findingsApi = {
+  /** AI findings of every DONE run of the study plus its MANUAL findings, optionally by status. */
+  forStudy: (studyId: Uuid, statuses: readonly ReviewStatus[] = []) => {
+    const query = new URLSearchParams(statuses.map((s) => ['status', s]));
+    const suffix = statuses.length > 0 ? `?${query.toString()}` : '';
+    return http.get<FindingDto[]>(`/studies/${studyId}/findings${suffix}`).then((r) => r.data);
+  },
+  review: (findingId: Uuid, body: ReviewFindingRequest) =>
+    http.patch<FindingDto>(`/findings/${findingId}/review`, body).then((r) => r.data),
+  create: (studyId: Uuid, body: CreateFindingRequest) =>
+    http.post<FindingDto>(`/studies/${studyId}/findings`, body).then((r) => r.data),
+  /** MANUAL findings of the caller only, while no FINAL report includes them. */
+  remove: (findingId: Uuid) => http.delete<void>(`/findings/${findingId}`).then(() => undefined),
+};
+
+// ---------- Annotations ----------
+
+export const annotationsApi = {
+  list: (studyId: Uuid) =>
+    http.get<AnnotationDto[]>(`/studies/${studyId}/annotations`).then((r) => r.data),
+  create: (studyId: Uuid, body: CreateAnnotationRequest) =>
+    http.post<AnnotationDto>(`/studies/${studyId}/annotations`, body).then((r) => r.data),
+  update: (id: Uuid, body: UpdateAnnotationRequest) =>
+    http.put<AnnotationDto>(`/annotations/${id}`, body).then((r) => r.data),
+  remove: (id: Uuid) => http.delete<void>(`/annotations/${id}`).then(() => undefined),
+};
+
+// ---------- Reports ----------
+
+export const reportsApi = {
+  /** Every version of the study's report, latest first (a researcher only gets FINAL ones). */
+  forStudy: (studyId: Uuid) =>
+    http.get<ReportSummaryDto[]>(`/studies/${studyId}/reports`).then((r) => r.data),
+  create: (studyId: Uuid, body: CreateReportRequest) =>
+    http.post<ReportDto>(`/studies/${studyId}/reports`, body).then((r) => r.data),
+  get: (id: Uuid) => http.get<ReportDto>(`/reports/${id}`).then((r) => r.data),
+  update: (id: Uuid, body: UpdateReportRequest) =>
+    http.put<ReportDto>(`/reports/${id}`, body).then((r) => r.data),
+  remove: (id: Uuid) => http.delete<void>(`/reports/${id}`).then(() => undefined),
+  finalize: (id: Uuid, body: FinalizeReportRequest) =>
+    http.post<ReportDto>(`/reports/${id}/finalize`, body).then((r) => r.data),
+  /**
+   * Rewrites Technique and Findings of a DRAFT from the study's reviewed findings and annotations
+   * as they are now (the other sections are kept).
+   */
+  refill: (id: Uuid, body: RefillReportRequest) =>
+    http.post<ReportDto>(`/reports/${id}/refill`, body).then((r) => r.data),
+  /** New DRAFT (version + 1) copied from a FINAL report. */
+  amend: (id: Uuid) => http.post<ReportDto>(`/reports/${id}/amend`).then((r) => r.data),
+  /** Draft PDF with a watermark, rendered on demand (needs the access token, hence a blob). */
+  previewPdf: (id: Uuid) =>
+    http
+      .get<Blob>(`/reports/${id}/preview.pdf`, { responseType: 'blob', timeout: 60_000 })
+      .then((r) => r.data),
+  /** Presigned link to the signed PDF of a FINAL report. */
+  pdfLink: (id: Uuid) => http.get<PdfLinkDto>(`/reports/${id}/pdf`).then((r) => r.data),
+  initKeyImage: (id: Uuid, body: InitKeyImageRequest) =>
+    http.post<InitKeyImageResponse>(`/reports/${id}/key-images/init`, body).then((r) => r.data),
+  /** The server checks the uploaded object (PNG, size); the report is read again afterwards. */
+  completeKeyImage: (id: Uuid, imageId: Uuid) =>
+    http.post<unknown>(`/reports/${id}/key-images/${imageId}/complete`).then(() => undefined),
+  removeKeyImage: (id: Uuid, imageId: Uuid) =>
+    http.delete<unknown>(`/reports/${id}/key-images/${imageId}`).then(() => undefined),
 };

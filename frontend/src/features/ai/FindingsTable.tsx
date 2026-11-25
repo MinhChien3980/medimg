@@ -1,12 +1,21 @@
 import { EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import { Button, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { FindingDto } from '@/api/types';
+import type { FindingDto, Uuid } from '@/api/types';
+import {
+  FindingReviewActions,
+  ReviewDetails,
+  ReviewStatusTag,
+  UnreviewedFilter,
+} from '@/features/review/FindingReview';
+import { displayLabel, isUnreviewed } from '@/features/review/reviewModel';
 import { formatPercent } from '@/shared/lib/format';
 import { sortFindings } from './findings';
 
 interface FindingsTableProps {
+  studyId: Uuid;
   findings: FindingDto[];
   /** 0..1 */
   threshold: number;
@@ -44,7 +53,12 @@ export function ConfidenceBar({ value, threshold }: { value: number; threshold: 
   );
 }
 
+/**
+ * Findings of a classification run, most likely first: heatmap toggle, confidence against the
+ * run's threshold, and the doctor's review (status, Accept / Edit / Reject, note).
+ */
 export function FindingsTable({
+  studyId,
   findings,
   threshold,
   heatmaps,
@@ -52,7 +66,8 @@ export function FindingsTable({
   onToggleHeatmap,
 }: FindingsTableProps) {
   const { t } = useTranslation();
-  const rows = sortFindings(findings);
+  const [unreviewedOnly, setUnreviewedOnly] = useState(false);
+  const rows = sortFindings(findings).filter((f) => !unreviewedOnly || isUnreviewed(f));
 
   const columns: ColumnsType<FindingDto> = [
     {
@@ -61,11 +76,16 @@ export function FindingsTable({
       render: (label: string, f) => {
         const hasHeatmap = !!heatmaps[label];
         const strong = (f.confidence ?? 0) >= threshold;
+        const shown = displayLabel(f);
         if (!hasHeatmap) {
           return (
             <Tooltip title={t('ai.noHeatmap')}>
-              <Typography.Text strong={strong} type={strong ? undefined : 'secondary'}>
-                {label}
+              <Typography.Text
+                strong={strong}
+                type={strong ? undefined : 'secondary'}
+                delete={f.reviewStatus === 'REJECTED'}
+              >
+                {shown}
               </Typography.Text>
             </Tooltip>
           );
@@ -81,7 +101,14 @@ export function FindingsTable({
               icon={visible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
               onClick={() => onToggleHeatmap(label)}
             >
-              <span style={{ fontWeight: strong ? 600 : 400 }}>{label}</span>
+              <span
+                style={{
+                  fontWeight: strong ? 600 : 400,
+                  textDecoration: f.reviewStatus === 'REJECTED' ? 'line-through' : undefined,
+                }}
+              >
+                {shown}
+              </span>
             </Button>
           </Tooltip>
         );
@@ -90,8 +117,19 @@ export function FindingsTable({
     {
       title: t('ai.confidence'),
       dataIndex: 'confidence',
-      width: '55%',
+      width: '38%',
       render: (v: number | null) => <ConfidenceBar value={v ?? 0} threshold={threshold} />,
+    },
+    {
+      title: t('review.column'),
+      key: 'review',
+      render: (_, f) => (
+        <div className="review-cell">
+          <ReviewStatusTag finding={f} />
+          <FindingReviewActions studyId={studyId} finding={f} />
+          <ReviewDetails finding={f} />
+        </div>
+      ),
     },
   ];
 
@@ -101,13 +139,14 @@ export function FindingsTable({
         <span className="findings__legend-line" aria-hidden />
         {t('ai.thresholdLegend', { value: Math.round(threshold * 100) })}
       </Typography.Text>
+      <UnreviewedFilter findings={findings} checked={unreviewedOnly} onChange={setUnreviewedOnly} />
       <Table<FindingDto>
         size="small"
         rowKey={(f) => f.id || f.label}
         columns={columns}
         dataSource={rows}
         pagination={false}
-        locale={{ emptyText: t('ai.noFindings') }}
+        locale={{ emptyText: t(unreviewedOnly ? 'review.allReviewed' : 'ai.noFindings') }}
         rowClassName={(f) => ((f.confidence ?? 0) >= threshold ? 'finding-row--above' : '')}
       />
     </div>
