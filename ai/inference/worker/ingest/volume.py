@@ -1,10 +1,11 @@
-"""Normalised volume shared by the viewer and the models: canonical RAS int16 NIfTI + thumbnail.
+"""Normalised volume shared by the viewer and the models: canonical RAS NIfTI + thumbnail.
 
 - `canonical_volume`: reorients to the closest canonical (RAS+) orientation with nibabel, so the
   array axes run left->right, posterior->anterior, inferior->superior. Only axis permutations
   and flips are applied: voxel values are never interpolated, the affine keeps the true spacing.
 - The header is fresh: no description, no extensions, no DICOM tags; qform and sform both hold
   the affine (code 1, scanner) and units are mm.
+- Voxels are int16, except image stacks with 16-bit values above 32767, which stay uint16.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from dataclasses import dataclass
 import nibabel as nib
 import numpy as np
 from PIL import Image
+
+from worker.messages import IngestResultType
 
 CT_AIR_HU = -1024
 THUMB_SIZE = 256
@@ -27,6 +30,9 @@ class NormalizedVolume:
     modality: str
     source_slices: int
     series_count: int
+    input_type: IngestResultType
+    spacing_assumed: bool = False
+    """True when the voxel size is a placeholder (image stack uploaded without a spacing)."""
 
     @property
     def dims(self) -> list[int]:
@@ -41,15 +47,18 @@ class NormalizedVolume:
         return [int(data.min()), int(data.max())]
 
 
-def canonical_volume(data: np.ndarray, ras_affine: np.ndarray, modality: str) -> nib.Nifti1Image:
-    """int16 (i, j, k) + RAS affine -> canonical int16 NIfTI. CT values below -1024 HU (padding
-    outside the field of view, e.g. -2000 or -3024) are clipped to air."""
+def canonical_volume(
+    data: np.ndarray, ras_affine: np.ndarray, modality: str, dtype: type = np.int16
+) -> nib.Nifti1Image:
+    """(i, j, k) voxels + RAS affine -> canonical NIfTI of `dtype` (int16, or uint16 for 16-bit
+    image stacks). CT values below -1024 HU (padding outside the field of view, e.g. -2000 or
+    -3024) are clipped to air."""
     if modality == "CT":
         np.maximum(data, CT_AIR_HU, out=data)
-    img = nib.Nifti1Image(data.astype(np.int16, copy=False), ras_affine)
+    img = nib.Nifti1Image(data.astype(dtype, copy=False), ras_affine)
     img = nib.as_closest_canonical(img)
     out = nib.Nifti1Image(np.ascontiguousarray(np.asanyarray(img.dataobj)), img.affine)
-    out.header.set_data_dtype(np.int16)
+    out.header.set_data_dtype(dtype)
     out.header.set_xyzt_units("mm")
     out.set_qform(img.affine, code=1)
     out.set_sform(img.affine, code=1)
@@ -59,20 +68,34 @@ def canonical_volume(data: np.ndarray, ras_affine: np.ndarray, modality: str) ->
 def axial_thumbnail(
     volume: nib.Nifti1Image,
     size: int = THUMB_SIZE,
-    window: tuple[float, float] = THUMB_WINDOW,
+    window: tuple[float, float] | None = THUMB_WINDOW,
 ) -> bytes:
     """Middle axial slice as an 8-bit PNG in radiological convention (patient's right on the
-    left of the image, anterior at the top), longest side `size` px, aspect from the spacing."""
+    left of the image, anterior at the top), longest side `size` px, aspect from the spacing.
+    `window` is (level, width); None stretches the slice's own value range."""
     data = np.asanyarray(volume.dataobj)
     zx, zy = (float(z) for z in volume.header.get_zooms()[:2])
     axial = data[:, :, data.shape[2] // 2].astype(np.float32)  # (x: R+, y: A+)
     image = axial.T[::-1, ::-1]  # rows: anterior -> posterior, columns: right -> left
-    level, width = window
+    if window is None:
+        low, high = float(image.min()), float(image.max())
+        level, width = (low + high) / 2, max(high - low, 1.0)
+    else:
+        level, width = window
     scaled = np.clip((image - (level - width / 2)) / width, 0.0, 1.0) * 255.0
-    height_mm, width_mm = image.shape[0] * zy, image.shape[1] * zx
-    scale = size / max(height_mm, width_mm)
-    target = (max(1, round(width_mm * scale)), max(1, round(height_mm * scale)))
-    thumb = Image.fromarray(np.rint(scaled).astype(np.uint8)).resize(
+    return thumbnail_png(np.rint(scaled).astype(np.uint8), (zx, zy), size)
+
+
+def thumbnail_png(
+    gray: np.ndarray, pixel_size: tuple[float, float] = (1.0, 1.0), size: int = THUMB_SIZE
+) -> bytes:
+    """8-bit grayscale (rows, columns) -> PNG whose longest side is `size` px. `pixel_size` is
+    (width, height) of a pixel, so non-square pixels keep the true aspect ratio."""
+    sx, sy = pixel_size
+    height, width = gray.shape[0] * sy, gray.shape[1] * sx
+    scale = size / max(height, width)
+    target = (max(1, round(width * scale)), max(1, round(height * scale)))
+    thumb = Image.fromarray(np.ascontiguousarray(gray, dtype=np.uint8)).resize(
         target, Image.Resampling.LANCZOS
     )
     buf = io.BytesIO()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import struct
 import tempfile
 import threading
@@ -114,6 +115,16 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(sorted(subjects), ["s0001", "s0002"])
         self.assertEqual(subjects["s0001"].meta["study_type"], "ct thorax")
         self.assertEqual(subjects["s0002"].meta, {})
+
+    def test_write_meta_saves_the_subject_row(self):
+        subjects = fs.index_subjects(self.source, list(self.entries.values()))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = fs.write_meta(subjects["s0001"], Path(tmp))
+            self.assertEqual(path, Path(tmp) / "s0001" / "meta.json")
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {"image_id": "s0001", "age": "60", "study_type": "ct thorax"},
+            )
 
     def test_attribution_cites_license_and_paper(self):
         subjects = fs.index_subjects(self.source, list(self.entries.values()))

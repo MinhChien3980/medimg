@@ -1,10 +1,14 @@
-"""Defensive ZIP extraction for uploaded DICOM series.
+"""Defensive ZIP extraction for uploaded series (DICOM files or plain PNG/JPEG slices).
 
 Archive member names never reach the file system: members are written as `00000`, `00001`, ...
-in a fresh directory. Names are still checked, and an archive with a path-traversal name is
-rejected as a whole: it is either broken or hostile. The size limit is checked on the sizes
-declared in the central directory; `zipfile` never inflates a member past its declared size and
-verifies its CRC-32, so the declared total bounds what reaches the disk.
+in a fresh directory, and the archive name is only returned alongside (image stacks are ordered
+by it). Names are still checked, and an archive with a path-traversal name is rejected as a
+whole: it is either broken or hostile. The size limit is checked on the sizes declared in the
+central directory; `zipfile` never inflates a member past its declared size and verifies its
+CRC-32, so the declared total bounds what reaches the disk.
+
+Operating-system clutter is not extracted: anything under `__MACOSX/` (macOS resource forks,
+`._name` files that look like the real ones) and hidden files or folders (`.DS_Store`, ...).
 """
 
 from __future__ import annotations
@@ -24,6 +28,14 @@ CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
+class ZipMember:
+    path: Path
+    """Where the member was written (a generated name)."""
+    name: str
+    """Its path inside the archive, `/`-separated."""
+
+
+@dataclass(frozen=True)
 class ZipLimits:
     max_entries: int = 2_000
     max_total_bytes: int = 2 * 1024**3
@@ -40,8 +52,14 @@ def _is_symlink(info: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(info.external_attr >> 16)
 
 
-def extract_members(archive: Path, dest: Path, limits: ZipLimits | None = None) -> list[Path]:
-    """Extract every regular file of `archive` into `dest`; returns the written paths."""
+def is_clutter(name: str) -> bool:
+    """`__MACOSX/...` or a hidden file or folder (`.DS_Store`, `._img1.png`, `.git/...`)."""
+    parts = PurePosixPath(name.replace("\\", "/")).parts
+    return any(part == "__MACOSX" or part.startswith(".") for part in parts)
+
+
+def extract_members(archive: Path, dest: Path, limits: ZipLimits | None = None) -> list[ZipMember]:
+    """Extract every regular file of `archive` into `dest`, except OS clutter."""
     limits = limits or ZipLimits()
     try:
         zf = zipfile.ZipFile(archive)
@@ -71,9 +89,9 @@ def extract_members(archive: Path, dest: Path, limits: ZipLimits | None = None) 
                 raise BadInputError(f"nested ZIP archives are not supported: {info.filename!r}")
 
         dest.mkdir(parents=True, exist_ok=True)
-        written: list[Path] = []
+        written: list[ZipMember] = []
         for info in infos:
-            if info.is_dir():
+            if info.is_dir() or is_clutter(info.filename):
                 continue
             path = dest / f"{len(written):05d}"
             try:
@@ -95,5 +113,5 @@ def extract_members(archive: Path, dest: Path, limits: ZipLimits | None = None) 
                 raise BadInputError(f"corrupt ZIP entry {info.filename!r}: {exc}") from exc
             except RuntimeError as exc:  # e.g. password required
                 raise BadInputError(f"cannot read ZIP entry {info.filename!r}: {exc}") from exc
-            written.append(path)
+            written.append(ZipMember(path, info.filename.replace("\\", "/")))
         return written

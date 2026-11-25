@@ -10,9 +10,12 @@ import nibabel as nib
 import numpy as np
 import pytest
 from botocore.exceptions import EndpointConnectionError
+from PIL import Image
 
 from tests.helpers import BUCKET, WORKER_ID
-from tests.volumes import SeriesSpec, nifti_bytes, series_zip
+from tests.radiographs import image_bytes, radiograph, ramp, save, slice_image
+from tests.volumes import SeriesSpec, nifti_bytes, series_zip, zip_files
+from worker.errors import InvalidJobError
 from worker.ingest.archive import ZipLimits
 from worker.ingest.workload import IngestWorkload
 from worker.messages import (
@@ -96,11 +99,13 @@ def test_nifti_upload_becomes_volume_and_thumbnail(redis_client, ingest, s3):
 
     payload = json.loads(results[-1]["payload"])
     assert payload == {
+        "inputType": "NIFTI",
         "volumeUri": f"{PREFIX}volume.nii.gz",
         "thumbnailUri": f"{PREFIX}thumb.png",
         "modality": "CT",
         "dims": [40, 30, 24],
         "spacing": [0.7, 0.7, 2.5],
+        "spacingAssumed": False,
         "numSlices": 24,
         "huRange": [-1000, 40],
         "sourceSeries": {"slices": 24, "seriesCount": 1},
@@ -117,28 +122,137 @@ def test_nifti_upload_becomes_volume_and_thumbnail(redis_client, ingest, s3):
     assert thumb["Body"].read()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_dicom_zip_upload(redis_client, ingest, s3, tmp_path):
+@pytest.mark.parametrize("input_type", ["ZIP", "DICOM_SERIES"])  # DICOM_SERIES: slice 2a name
+def test_dicom_zip_upload(redis_client, ingest, s3, tmp_path, input_type):
     spec = SeriesSpec(slices=22)
     other = SeriesSpec(slices=20, origin=(5.0, 5.0, 5.0))
     put(s3, "uploads/u/f/series.zip", series_zip(spec, other, tmp=tmp_path))
     redis_client.xadd(
         IMAGING_JOBS_STREAM,
-        ingest_fields(inputType="DICOM_SERIES", inputUri=f"s3://{BUCKET}/uploads/u/f/series.zip"),
+        ingest_fields(
+            inputType=input_type,
+            inputUri=f"s3://{BUCKET}/uploads/u/f/series.zip",
+            sliceSpacingMm="[0.5, 0.5, 0.5]",  # ignored: a DICOM series has its own geometry
+        ),
     )
     ingest.poll_once()
 
     payload = json.loads(out(redis_client)[-1]["payload"])
+    assert payload["inputType"] == "DICOM_SERIES"
     assert payload["modality"] == "CT"
+    assert payload["spacingAssumed"] is False
     assert payload["sourceSeries"] == {"slices": 22, "seriesCount": 2}
     assert payload["huRange"] == [0, 1000]
     assert sorted(payload["dims"]) == sorted([12, 10, 22])
+    assert sorted(payload["spacing"]) == pytest.approx(sorted([0.7, 0.9, 2.5]))
+
+
+@pytest.mark.parametrize(
+    ("spacing_field", "spacing", "assumed", "thumb_size"),
+    [
+        ("", [1.0, 1.0, 1.0], True, (256, 171)),
+        ("[0.8, 0.6, 3]", [0.8, 0.6, 3.0], False, (256, 128)),
+    ],
+)
+def test_image_stack_zip_upload(
+    redis_client, ingest, s3, spacing_field, spacing, assumed, thumb_size
+):
+    entries = [
+        (f"scan/{k + 1}.png", image_bytes(slice_image(k, width=300, height=200))) for k in range(21)
+    ]
+    put(s3, "uploads/u/f/stack.zip", zip_files(entries))
+    redis_client.xadd(
+        IMAGING_JOBS_STREAM,
+        ingest_fields(
+            inputType="ZIP",
+            inputUri=f"s3://{BUCKET}/uploads/u/f/stack.zip",
+            sliceSpacingMm=spacing_field,
+        ),
+    )
+    ingest.poll_once()
+
+    results = out(redis_client)
+    assert [m["progress"] for m in results] == ["0", "10", "40", "70", "90", "95", "100"]
+    assert json.loads(results[-1]["payload"]) == {
+        "inputType": "IMAGE_STACK",
+        "volumeUri": f"{PREFIX}volume.nii.gz",
+        "thumbnailUri": f"{PREFIX}thumb.png",
+        "modality": "OT",
+        "dims": [300, 200, 21],
+        "spacing": spacing,
+        "spacingAssumed": assumed,
+        "numSlices": 21,
+        "huRange": [0, 220],
+        "sourceSeries": {"slices": 21, "seriesCount": 1},
+    }
+    # The thumbnail shows the middle image as stored (stretched to its own range): the marker
+    # pixel at row 2, column 5 of the image stays in the top-left corner.
+    body = s3.get_object(Bucket=BUCKET, Key="studies/st1/series/se1/thumb.png")["Body"].read()
+    thumb = Image.open(io.BytesIO(body))
+    assert thumb.size == thumb_size
+    row, column = np.unravel_index(np.argmax(np.asarray(thumb)), thumb.size[::-1])
+    assert row < 8 and column < 10
+
+
+def test_dicom_2d_upload(redis_client, ingest, s3, tmp_path):
+    ds = radiograph(ramp(rows=400, columns=300), modality="CR", PixelSpacing=[0.15, 0.1])
+    put(s3, "uploads/u/f/chest.dcm", save(ds, tmp_path / "chest.dcm").read_bytes())
+    redis_client.xadd(
+        IMAGING_JOBS_STREAM,
+        ingest_fields(inputType="DICOM_2D", inputUri=f"s3://{BUCKET}/uploads/u/f/chest.dcm"),
+    )
+    ingest.poll_once()
+
+    results = out(redis_client)
+    assert [m["progress"] for m in results] == ["0", "10", "40", "70", "90", "95", "100"]
+    assert json.loads(results[-1]["payload"]) == {
+        "inputType": "DICOM_2D",
+        "imageUri": f"{PREFIX}image.png",
+        "thumbnailUri": f"{PREFIX}thumb.png",
+        "modality": "CR",
+        "dims": [300, 400, 1],
+        "spacing": [0.1, 0.15, None],
+    }
+    stored = s3.get_object(Bucket=BUCKET, Key="studies/st1/series/se1/image.png")
+    assert stored["ContentType"] == "image/png"
+    image = Image.open(io.BytesIO(stored["Body"].read()))
+    assert (image.mode, image.size) == ("L", (300, 400))
+    thumb = s3.get_object(Bucket=BUCKET, Key="studies/st1/series/se1/thumb.png")["Body"].read()
+    assert Image.open(io.BytesIO(thumb)).size == (128, 256)  # 30 x 60 mm
+
+
+def test_dicom_2d_without_spacing_has_null_spacing(redis_client, ingest, s3, tmp_path):
+    put(s3, "uploads/u/f/x.dcm", save(radiograph(), tmp_path / "x.dcm").read_bytes())
+    redis_client.xadd(
+        IMAGING_JOBS_STREAM,
+        ingest_fields(inputType="DICOM_2D", inputUri=f"s3://{BUCKET}/uploads/u/f/x.dcm"),
+    )
+    ingest.poll_once()
+    payload = json.loads(out(redis_client)[-1]["payload"])
+    assert payload["spacing"] is None
+    assert payload["dims"] == [260, 300, 1]
+
+
+def test_ct_slice_as_dicom_2d_fails_with_a_readable_message(redis_client, ingest, s3, tmp_path):
+    put(s3, "uploads/u/f/x.dcm", save(radiograph(modality="CT"), tmp_path / "x.dcm").read_bytes())
+    redis_client.xadd(
+        IMAGING_JOBS_STREAM,
+        ingest_fields(inputType="DICOM_2D", inputUri=f"s3://{BUCKET}/uploads/u/f/x.dcm"),
+    )
+    ingest.poll_once()
+    failed = out(redis_client)[-1]
+    assert (failed["type"], failed["retryable"], failed["progress"]) == ("FAILED", "false", "10")
+    assert failed["error"] == (
+        "this DICOM file is a single CT slice; upload the whole series as a ZIP of its DICOM files"
+    )
+    assert pending(redis_client) == 0
 
 
 def test_bad_data_fails_not_retryable_with_a_clear_message(redis_client, ingest, s3, tmp_path):
     put(s3, "uploads/u/f/series.zip", series_zip(SeriesSpec(slices=5), tmp=tmp_path))
     redis_client.xadd(
         IMAGING_JOBS_STREAM,
-        ingest_fields(inputType="DICOM_SERIES", inputUri=f"s3://{BUCKET}/uploads/u/f/series.zip"),
+        ingest_fields(inputType="ZIP", inputUri=f"s3://{BUCKET}/uploads/u/f/series.zip"),
     )
     ingest.poll_once()
 
@@ -172,7 +286,14 @@ def test_missing_upload_is_not_retryable(redis_client, ingest):
 
 @pytest.mark.parametrize(
     ("override", "attempt"),
-    [({"inputType": "IMAGE_2D"}, "1"), ({"attempt": "zero"}, "0"), ({"inputUri": "/x"}, "1")],
+    [
+        ({"inputType": "IMAGE_2D"}, "1"),
+        ({"inputType": "IMAGE_STACK"}, "1"),  # a result type, never a job input
+        ({"attempt": "zero"}, "0"),
+        ({"inputUri": "/x"}, "1"),
+        ({"inputType": "ZIP", "sliceSpacingMm": "[1, 1]"}, "1"),
+        ({"inputType": "ZIP", "sliceSpacingMm": "[1, 1, 0]"}, "1"),
+    ],
 )
 def test_invalid_message_fails_not_retryable(redis_client, ingest, override, attempt):
     redis_client.xadd(IMAGING_JOBS_STREAM, ingest_fields(**override))
@@ -191,8 +312,43 @@ def test_group_is_created_from_the_beginning_of_the_stream(redis_client, storage
     assert out(redis_client)[0]["uploadId"] == "early"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", None),
+        ("  ", None),
+        ("[0.5, 0.5, 2]", (0.5, 0.5, 2.0)),
+        ("[0.01,20,1]", (0.01, 20.0, 1.0)),
+    ],
+)
+def test_slice_spacing_is_parsed(raw, expected):
+    assert IngestJob.parse(ingest_fields(sliceSpacingMm=raw)).slice_spacing_mm == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[1, 1]",
+        "[1, 1, 1, 1]",
+        "[0, 1, 1]",
+        "[1, 1, 20.5]",
+        "[1, true, 1]",
+        '["1", 1, 1]',
+        '{"x": 1}',
+        "1",
+        "[1, 1, NaN]",
+        "[1, 1, Infinity]",
+        "nope",
+    ],
+)
+def test_invalid_slice_spacing_is_refused(raw):
+    with pytest.raises(InvalidJobError, match="sliceSpacingMm must be a JSON array of three"):
+        IngestJob.parse(ingest_fields(sliceSpacingMm=raw))
+
+
 def test_parse_ingest_job():
     job = IngestJob.parse(ingest_fields(modalityHint=" ct "))
+    assert job.slice_spacing_mm is None
     assert job.id == UPLOAD_ID
     assert job.modality_hint == "CT"
     assert job.body_part_hint == "CHEST"
@@ -201,8 +357,6 @@ def test_parse_ingest_job():
 
 
 def test_thumbnail_png_decodes(redis_client, ingest, s3):
-    from PIL import Image
-
     put(
         s3,
         f"uploads/{UPLOAD_ID}/f1/ct.nii.gz",

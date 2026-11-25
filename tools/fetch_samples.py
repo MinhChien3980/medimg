@@ -3,7 +3,8 @@
 
 The subset is one 3.2 GB ZIP on Zenodo (record 10047263, CC BY 4.0). This script reads the ZIP
 central directory with HTTP Range requests and extracts only the chosen members, so a run
-transfers a few hundred MB instead of the whole archive.
+transfers a few hundred MB instead of the whole archive. Each subject's row of the dataset's
+meta.csv is saved next to its CT as `meta.json` (seed_samples.py describes the sample with it).
 
     python tools/fetch_samples.py                  # default subjects -> data/samples/<id>/ct.nii.gz
     python tools/fetch_samples.py --list           # every subject with its study type and CT size
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import re
 import struct
 import sys
@@ -340,6 +342,18 @@ def index_subjects(source: RangeSource, entries: list[ZipEntry]) -> dict[str, Su
     return subjects
 
 
+def write_meta(subject: Subject, dest: Path) -> Path:
+    """The subject's meta.csv row as `<dest>/<id>/meta.json` (seed_samples.py builds the sample's
+    title and description from it)."""
+    path = dest / subject.subject_id / "meta.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(subject.meta, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def attribution(subjects: list[Subject]) -> str:
     lines = [
         "# Sample data attribution",
@@ -392,6 +406,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for s in chosen:
         dest = args.dest / s.subject_id / "ct.nii.gz"
+        write_meta(s, args.dest)
         if dest.exists() and dest.stat().st_size == s.ct.uncompressed_size:
             print(f"{s.subject_id}: already present ({dest})")
             continue

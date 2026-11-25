@@ -6,13 +6,16 @@ Results (stream `ai.results`): jobId, attempt, workerId, type (STARTED|PROGRESS|
 progress (0-100), payload (DONE, JSON string), error + retryable ("true"/"false") (FAILED).
 
 Ingest jobs (stream `imaging.jobs`, group `ingest-workers`): uploadId, attempt, inputType
-(NIFTI|DICOM_SERIES), inputUri, outputPrefix, modalityHint, bodyPartHint.
-Results (stream `imaging.results`): the AI result fields with `uploadId` instead of `jobId`.
+(DICOM_2D|ZIP|NIFTI), inputUri, outputPrefix, modalityHint, bodyPartHint, sliceSpacingMm (JSON
+array `[x, y, z]` mm or empty).
+Results (stream `imaging.results`): the AI result fields with `uploadId` instead of `jobId`; the
+DONE payload names the final input type (DICOM_2D|DICOM_SERIES|IMAGE_STACK|NIFTI).
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -129,11 +132,53 @@ class JobMessage:
 
 
 class IngestInputType(StrEnum):
-    NIFTI = "NIFTI"
-    DICOM_SERIES = "DICOM_SERIES"
+    """What core recognised from the upload's magic bytes; a ZIP's content is the worker's call."""
 
+    DICOM_2D = "DICOM_2D"
+    ZIP = "ZIP"
+    NIFTI = "NIFTI"
+
+
+class IngestResultType(StrEnum):
+    """`inputType` of the DONE payload: what the upload turned out to be."""
+
+    DICOM_2D = "DICOM_2D"
+    DICOM_SERIES = "DICOM_SERIES"
+    IMAGE_STACK = "IMAGE_STACK"
+    NIFTI = "NIFTI"
+
+
+_LEGACY_INPUT_TYPES = {"DICOM_SERIES": IngestInputType.ZIP}
+"""Slice 2a name of `ZIP`, still accepted for jobs queued before an upgrade."""
 
 _INGEST_REQUIRED = ("uploadId", "attempt", "inputType", "inputUri", "outputPrefix")
+
+SLICE_SPACING_RANGE_MM = (0.01, 20.0)
+
+
+def _slice_spacing(raw: str) -> tuple[float, float, float] | None:
+    """`sliceSpacingMm`: empty, or a JSON array of three numbers in 0.01-20 mm."""
+    if not raw.strip():
+        return None
+    lo, hi = SLICE_SPACING_RANGE_MM
+    error = InvalidJobError(
+        f"sliceSpacingMm must be a JSON array of three numbers between {lo:g} and {hi:g} mm, "
+        f"got {raw[:100]!r}"
+    )
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        raise error from None
+    if not isinstance(value, list) or len(value) != 3:
+        raise error
+    spacing: list[float] = []
+    for v in value:
+        if isinstance(v, bool) or not isinstance(v, int | float):
+            raise error
+        if not (math.isfinite(v) and lo <= v <= hi):
+            raise error
+        spacing.append(float(v))
+    return spacing[0], spacing[1], spacing[2]
 
 
 @dataclass(frozen=True)
@@ -145,6 +190,8 @@ class IngestJob:
     output_prefix: str
     modality_hint: str = ""
     body_part_hint: str = ""
+    slice_spacing_mm: tuple[float, float, float] | None = None
+    """Voxel size `[x, y, z]` given by the uploader for a ZIP of plain images; None = unknown."""
 
     @property
     def id(self) -> str:
@@ -154,12 +201,12 @@ class IngestJob:
     def parse(cls, fields: dict[str, str]) -> IngestJob:
         _missing(fields, _INGEST_REQUIRED)
         attempt = _attempt(fields["attempt"])
+        raw_type = fields["inputType"]
         try:
-            input_type = IngestInputType(fields["inputType"])
+            input_type = _LEGACY_INPUT_TYPES.get(raw_type) or IngestInputType(raw_type)
         except ValueError:
-            raise InvalidJobError(
-                f"inputType must be NIFTI or DICOM_SERIES, got {fields['inputType']!r}"
-            ) from None
+            allowed = ", ".join(t.value for t in IngestInputType)
+            raise InvalidJobError(f"inputType must be one of {allowed}, got {raw_type!r}") from None
         _s3_uris(fields, ("inputUri", "outputPrefix"))
         return cls(
             upload_id=fields["uploadId"],
@@ -169,6 +216,7 @@ class IngestJob:
             output_prefix=fields["outputPrefix"],
             modality_hint=fields.get("modalityHint", "").strip().upper(),
             body_part_hint=fields.get("bodyPartHint", "").strip(),
+            slice_spacing_mm=_slice_spacing(fields.get("sliceSpacingMm", "")),
         )
 
     def artifact_uri(self, name: str) -> str:

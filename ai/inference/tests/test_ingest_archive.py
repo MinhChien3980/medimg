@@ -8,7 +8,7 @@ import pytest
 
 from tests.volumes import zip_files
 from worker.errors import BadInputError
-from worker.ingest.archive import ZipLimits, extract_members
+from worker.ingest.archive import ZipLimits, extract_members, is_clutter
 
 
 def write(tmp_path, data: bytes):
@@ -20,9 +20,38 @@ def write(tmp_path, data: bytes):
 def test_extracts_regular_files_under_generated_names(tmp_path):
     archive = write(tmp_path, zip_files([("a/b/1.dcm", b"one"), ("a/2.dcm", b"two")]))
     out = extract_members(archive, tmp_path / "out")
-    assert [p.name for p in out] == ["00000", "00001"]
-    assert [p.read_bytes() for p in out] == [b"one", b"two"]
+    assert [m.path.name for m in out] == ["00000", "00001"]
+    assert [m.name for m in out] == ["a/b/1.dcm", "a/2.dcm"]
+    assert [m.path.read_bytes() for m in out] == [b"one", b"two"]
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["00000", "00001"]
+
+
+def test_skips_macos_resource_forks_and_hidden_files(tmp_path):
+    entries = [
+        ("__MACOSX/scan/._1.png", b"fork"),
+        ("scan/.DS_Store", b"store"),
+        (".hidden/1.png", b"hidden"),
+        ("scan/1.png", b"kept"),
+        ("scan/.../x", b"dots"),
+    ]
+    out = extract_members(write(tmp_path, zip_files(entries)), tmp_path / "out")
+    assert [(m.name, m.path.read_bytes()) for m in out] == [("scan/1.png", b"kept")]
+
+
+@pytest.mark.parametrize(
+    ("name", "clutter"),
+    [
+        ("__MACOSX/a.png", True),
+        ("a/__MACOSX/b", True),
+        (".DS_Store", True),
+        ("a/._b.png", True),
+        ("a/b.png", False),
+        ("a.b/c.png", False),
+        ("MACOSX/a.png", False),
+    ],
+)
+def test_is_clutter(name, clutter):
+    assert is_clutter(name) is clutter
 
 
 @pytest.mark.parametrize(

@@ -10,14 +10,15 @@ import SimpleITK as sitk
 from tests.volumes import AXIAL, CORONAL, SAGITTAL, SeriesSpec, oblique, series_zip, write_series
 from worker.errors import BadInputError
 from worker.ingest import dicom
-from worker.ingest.workload import ingest_dicom_zip
+from worker.ingest.workload import ingest_zip
+from worker.messages import IngestResultType
 
 
 def ingest(tmp_path, *specs: SeriesSpec, extra=()):
     archive = tmp_path / "upload"
     archive.write_bytes(series_zip(*specs, tmp=tmp_path / "src", extra=extra))
     progress: list[int] = []
-    volume = ingest_dicom_zip(archive, tmp_path / "work", progress.append)
+    volume = ingest_zip(archive, tmp_path / "work", progress.append)
     return volume, progress
 
 
@@ -42,6 +43,8 @@ def test_marker_keeps_its_patient_position(tmp_path, orientation):
     assert nib.aff2axcodes(volume.image.affine) == ("R", "A", "S")
     assert progress == [40]
     assert volume.modality == "CT"
+    assert volume.input_type is IngestResultType.DICOM_SERIES
+    assert volume.spacing_assumed is False
     assert volume.source_slices == spec.slices
     assert volume.series_count == 1
     data = np.asanyarray(volume.image.dataobj)
@@ -109,7 +112,7 @@ def test_zip_without_dicom_is_rejected(tmp_path):
     archive = tmp_path / "upload"
     archive.write_bytes(series_zip(tmp=tmp_path, extra=[("a.txt", b"x" * 300)]))
     with pytest.raises(BadInputError, match="no DICOM image"):
-        ingest_dicom_zip(archive, tmp_path / "work", lambda _: None)
+        ingest_zip(archive, tmp_path / "work", lambda _: None)
 
 
 def test_gantry_tilt_is_rejected(tmp_path):

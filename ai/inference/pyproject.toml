@@ -18,6 +18,8 @@ dependencies = [
     # CT volumes: ingest (DICOM/NIfTI -> canonical NIfTI) and segmentation -> meshes
     "nibabel~=5.5.0",
     "pydicom~=3.0.2",
+    # pydicom's decoder for compressed DICOM (JPEG Baseline/Extended/Lossless, JPEG-LS, JPEG 2000)
+    "python-gdcm~=3.2.6",
     "SimpleITK~=2.5.8",
     "scipy~=1.18.1",
     "scikit-image~=0.26.0",

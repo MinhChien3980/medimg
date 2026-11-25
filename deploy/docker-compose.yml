@@ -79,7 +79,9 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
-    # 0.2 GB for a 42 M-voxel CT; the 2 GB cap covers the 300 M-voxel limit (int16 copies).
+    # Measured peaks: 0.2 GB for a 42 M-voxel CT, 0.67 GB for a 293 M-voxel ZIP of PNG slices
+    # (just under the 300 M-voxel limit), 0.53 GB for a 49-megapixel DICOM radiograph (limit 50).
+    # The 2 GB cap leaves room for the DICOM series path, which holds two int16 copies.
     deploy: { resources: { limits: { memory: 2g, cpus: "2.0" } } }
 
   core-service:
