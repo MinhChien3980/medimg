@@ -1,8 +1,7 @@
-import { ArrowLeftOutlined, CloudUploadOutlined, PictureOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CloudUploadOutlined, StarFilled } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, Descriptions, Empty, Result, Skeleton, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router';
 import { patientsApi, studiesApi } from '@/api/endpoints';
@@ -12,6 +11,8 @@ import { isVolumeInput, type PredictionDto, type StudyDto } from '@/api/types';
 import { findingValue, isSegmentationResult, sortFindings } from '@/features/ai/findings';
 import { PredictionStatusTag } from '@/features/ai/PredictionStatusTag';
 import { useCan } from '@/features/auth/permissions';
+import { CaseSampleCard } from '@/features/samples/CaseSampleCard';
+import { PresignedThumbnail } from '@/shared/components/PresignedThumbnail';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { formatDateTime } from '@/shared/lib/format';
 
@@ -56,6 +57,11 @@ export default function CaseDetailPage() {
           </Link>
           <Typography.Title level={3} style={{ margin: '4px 0 0' }}>
             {p?.code ?? <Skeleton.Input active size="small" />}
+            {p?.sample && (
+              <Tag color="gold" icon={<StarFilled />} className="page__title-tag">
+                {t('caseDetail.sampleTag')}
+              </Tag>
+            )}
           </Typography.Title>
         </div>
         {can('upload') && (
@@ -106,6 +112,8 @@ export default function CaseDetailPage() {
         )}
       </Card>
 
+      {p && <CaseSampleCard patient={p} />}
+
       <Typography.Title level={4}>{t('caseDetail.studies')}</Typography.Title>
       {studies.isError && (
         <ProblemAlert
@@ -135,30 +143,6 @@ export default function CaseDetailPage() {
   );
 }
 
-function StudyThumbnail({ study, onError }: { study: StudyDto; onError: () => void }) {
-  const url = study.series[0]?.thumbnailUrl;
-  // Retry once per URL: presigned URLs expire after 15 min, a refetch returns fresh ones.
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (!url || failedUrl === url) {
-    return (
-      <div className="study-card__thumb study-card__thumb--empty">
-        <PictureOutlined />
-      </div>
-    );
-  }
-  return (
-    <img
-      className="study-card__thumb"
-      src={url}
-      alt={`${study.modality} ${study.bodyPart}`}
-      onError={() => {
-        setFailedUrl(url);
-        onError();
-      }}
-    />
-  );
-}
-
 function StudyCard({ study, onThumbError }: { study: StudyDto; onThumbError: () => void }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -169,12 +153,20 @@ function StudyCard({ study, onThumbError }: { study: StudyDto; onThumbError: () 
     <Card size="small" className="study-card">
       <div className="study-card__body">
         <Link to={viewerPath} className="study-card__media" aria-label={t('caseDetail.openViewer')}>
-          <StudyThumbnail study={study} onError={onThumbError} />
+          <PresignedThumbnail
+            url={study.series[0]?.thumbnailUrl}
+            alt={`${study.modality} ${study.bodyPart}`}
+            className="study-card__thumb"
+            onError={onThumbError}
+          />
         </Link>
         <div className="study-card__meta">
           <div className="study-card__title">
             <Tag color="blue">{study.modality}</Tag>
             <Tag>{study.bodyPart}</Tag>
+            {study.inputType !== 'IMAGE_2D' && (
+              <Tag>{t(`caseDetail.inputTypes.${study.inputType}`)}</Tag>
+            )}
             {isVolumeInput(study.inputType) && (
               <Tag color="geekblue">{t('caseDetail.volume', { dims: dims ?? '' })}</Tag>
             )}

@@ -8,6 +8,9 @@ export const queryKeys = {
     detail: (id: Uuid) => ['patients', 'detail', id] as const,
     studies: (id: Uuid) => ['patients', 'studies', id] as const,
   },
+  samples: {
+    all: ['samples'] as const,
+  },
   uploads: {
     detail: (id: Uuid) => ['uploads', id] as const,
   },

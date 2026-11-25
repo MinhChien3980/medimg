@@ -11,7 +11,10 @@ import { ImageStudyView } from './ImageStudyView';
 import { useRefreshBudget } from './lib/useRefreshBudget';
 import { VolumeStudyView } from './volume/VolumeStudyView';
 
-/** `/studies/:studyId`: 2D studies keep the canvas viewer, CT volumes get MPR | 3D. */
+/**
+ * `/studies/:studyId`: 2D studies (PNG/JPG, DICOM X-ray) get the canvas viewer, volumes (NIfTI,
+ * DICOM series, image stack) get MPR | 3D.
+ */
 export default function ViewerPage() {
   const { studyId = '' } = useParams();
   const { t } = useTranslation();

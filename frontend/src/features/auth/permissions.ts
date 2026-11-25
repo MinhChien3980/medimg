@@ -2,13 +2,16 @@ import { useCallback } from 'react';
 import type { Role, UserDto } from '@/api/types';
 import { useAuthStore } from './authStore';
 
-/** UI actions gated by role. Mirrors the `@PreAuthorize` rules of core-service. */
-export type Permission = 'createCase' | 'upload' | 'runAi' | 'manageJob';
+/**
+ * UI actions gated by role. Mirrors the `@PreAuthorize` rules of core-service. `manageSamples`
+ * (mark / unmark a case as a sample case) is for admins only.
+ */
+export type Permission = 'createCase' | 'upload' | 'runAi' | 'manageJob' | 'manageSamples';
 
 const WRITE: readonly Permission[] = ['createCase', 'upload', 'runAi', 'manageJob'];
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  ADMIN: WRITE,
+  ADMIN: [...WRITE, 'manageSamples'],
   DOCTOR: WRITE,
   TECHNICIAN: WRITE,
   RESEARCHER: [],

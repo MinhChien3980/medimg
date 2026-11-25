@@ -1,6 +1,6 @@
-import { PlusOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { App, Button, Input, Table, Typography } from 'antd';
+import { App, Button, Empty, Input, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -127,7 +127,20 @@ export default function CasesListPage() {
         columns={columns}
         dataSource={list.data?.content ?? []}
         loading={list.isFetching}
-        locale={{ emptyText: t('cases.empty') }}
+        locale={{
+          emptyText: q ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('cases.noMatch')} />
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('cases.empty')}>
+              <Typography.Paragraph type="secondary">
+                {t('cases.trySamplesHint')}
+              </Typography.Paragraph>
+              <Link to="/samples" className="cases-empty__samples">
+                <AppstoreOutlined /> {t('cases.trySamples')}
+              </Link>
+            </Empty>
+          ),
+        }}
         onRow={(record) => ({
           onClick: () => void navigate(`/cases/${record.id}`),
           style: { cursor: 'pointer' },

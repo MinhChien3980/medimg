@@ -40,3 +40,13 @@ export function matchPreset(window: CtWindow): CtPresetId | null {
   const c = Math.round(window.center);
   return CT_WINDOW_PRESETS.find((p) => p.width === w && p.center === c)?.id ?? null;
 }
+
+/**
+ * Window showing the whole intensity range `[min, max]` of a volume, for data that is not in
+ * Hounsfield units (e.g. an image stack, 0..255): the VOI range is exactly that range.
+ */
+export function windowFromRange([min, max]: readonly [number, number]): CtWindow {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { width: 256, center: 128 };
+  if (max <= min) return { width: 1, center: min + 0.5 };
+  return fromVoiRange({ lower: min, upper: max });
+}

@@ -1,4 +1,5 @@
 import {
+  AppstoreOutlined,
   CloudUploadOutlined,
   FolderOpenOutlined,
   LogoutOutlined,
@@ -25,6 +26,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { path: '/cases', icon: <FolderOpenOutlined />, labelKey: 'nav.cases' },
+  { path: '/samples', icon: <AppstoreOutlined />, labelKey: 'nav.samples' },
   { path: '/upload', icon: <CloudUploadOutlined />, labelKey: 'nav.upload', permission: 'upload' },
 ];
 

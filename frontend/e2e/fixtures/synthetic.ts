@@ -272,3 +272,28 @@ export function generateSyntheticStudy(): SyntheticStudy {
     ],
   };
 }
+
+/** Highest voxel value of the image stack below (lowest: 0, the background). */
+export const STACK_MAX = 219;
+
+/**
+ * An 8-bit image stack as the ingest worker stores it (uint8 NIfTI, same grid and affine as the
+ * CT above): an ellipse whose grey level rises from 60 on the first slice to `STACK_MAX` on the
+ * last, on a black background. Not Hounsfield units, so the viewer windows it over 0..STACK_MAX.
+ */
+export function generateImageStackVolume(): Buffer {
+  const grey = Buffer.alloc(NX * NY * NZ);
+  let n = 0;
+  for (let k = 0; k < NZ; k += 1) {
+    const level = 60 + Math.round(((STACK_MAX - 60) * k) / (NZ - 1));
+    for (let j = 0; j < NY; j += 1) {
+      for (let i = 0; i < NX; i += 1) {
+        const dx = (i - NX / 2) / 40;
+        const dy = (j - NY / 2) / 30;
+        grey.writeUInt8(dx * dx + dy * dy <= 1 ? level : 0, n);
+        n += 1;
+      }
+    }
+  }
+  return gzipSync(Buffer.concat([niftiHeader(2, 8), grey]));
+}

@@ -22,6 +22,7 @@ import {
   CT_WINDOW_PRESETS,
   DEFAULT_CT_WINDOW,
   matchPreset,
+  windowFromRange,
   type CtPresetId,
   type CtWindow,
 } from '../../lib/ctWindow';
@@ -44,6 +45,11 @@ export interface FocusRequest {
 export interface MprViewProps {
   /** Presigned URL of the normalised volume. Only its object path is tracked (see below). */
   volumeUrl: string;
+  /**
+   * The volume is a CT in Hounsfield units: CT window presets, soft tissue by default. Otherwise
+   * (an image stack, MR) there are no presets and the default window spans the data range.
+   */
+  hounsfield?: boolean;
   /** Memoised by the caller; a new object with the same object path only restyles. */
   labelmap: MprLabelmap | null;
   /** Shown above the views (e.g. why the labelmap cannot be overlaid). */
@@ -66,14 +72,21 @@ const SCROLL_KEYS: Record<string, number> = {
 };
 
 /**
- * Axial, coronal and sagittal views of one CT volume in one rendering engine, with crosshairs,
- * window/level presets and the segmentation labelmap. The rendering library sits behind
+ * Axial, coronal and sagittal views of one volume in one rendering engine, with crosshairs,
+ * window/level (CT presets for a CT) and the segmentation labelmap. The rendering library sits behind
  * `MprEngine`, created once per mount and destroyed on unmount.
  *
  * Presigned URLs change on every refetch (new signature) for the same object, so loads are keyed
  * by the object path: a refetch neither reloads the volume nor the labelmap.
  */
-export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: MprViewProps) {
+export function MprView({
+  volumeUrl,
+  hounsfield = true,
+  labelmap,
+  notice,
+  focus,
+  onVolumeError,
+}: MprViewProps) {
   const { t, i18n } = useTranslation();
   const { loadMprEngine } = useVolumeBackends();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -88,7 +101,10 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
   const [attempt, setAttempt] = useState(0);
   const [overlay, setOverlay] = useState<OverlayState>({ key: null, state: 'ready' });
   const [tool, setTool] = useState<MprTool>('crosshairs');
-  const [ctWindow, setCtWindow] = useState<CtWindow>(DEFAULT_CT_WINDOW);
+  // A CT starts on soft tissue; other data waits for its range, then shows all of it.
+  const [dataWindow, setDataWindow] = useState<CtWindow | null>(null);
+  const [ctWindow, setCtWindow] = useState<CtWindow | null>(hounsfield ? DEFAULT_CT_WINDOW : null);
+  const defaultWindow = hounsfield ? DEFAULT_CT_WINDOW : dataWindow;
   const [opacity, setOpacity] = useState(0.5);
   const [crosshair, setCrosshair] = useState<Vec3 | null>(null);
 
@@ -138,8 +154,14 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
     if (!engine) return;
     let current = true;
     engine.loadVolume(volumeUrlRef.current).then(
-      () => {
-        if (current) setStatus('ready');
+      ({ range }) => {
+        if (!current) return;
+        setStatus('ready');
+        if (!hounsfield) {
+          const initial = windowFromRange(range);
+          setDataWindow(initial);
+          setCtWindow((w) => w ?? initial);
+        }
       },
       (error: unknown) => {
         console.error('[MPR] cannot load the volume', error);
@@ -151,7 +173,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
     return () => {
       current = false;
     };
-  }, [engine, attempt]);
+  }, [engine, attempt, hounsfield]);
 
   useEffect(() => {
     if (!engine || !ready) return;
@@ -179,7 +201,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
   }, [engine, opacity]);
 
   useEffect(() => {
-    engine?.setWindow(ctWindow);
+    if (ctWindow) engine?.setWindow(ctWindow);
   }, [engine, ctWindow]);
 
   useEffect(() => {
@@ -213,7 +235,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
   const overlayLoading = labelmapKey !== null && overlay.key !== labelmapKey;
   const overlayFailed =
     labelmapKey !== null && overlay.key === labelmapKey && overlay.state === 'error';
-  const preset: CtPresetId | 'custom' = matchPreset(ctWindow) ?? 'custom';
+  const preset: CtPresetId | 'custom' = (ctWindow && matchPreset(ctWindow)) ?? 'custom';
   const refs: Record<MprOrientation, typeof axialRef> = {
     axial: axialRef,
     coronal: coronalRef,
@@ -233,23 +255,26 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
             { value: 'zoom', icon: <ZoomInOutlined />, label: t('viewer.tools.zoom') },
           ]}
         />
-        <Segmented<CtPresetId | 'custom'>
-          aria-label={t('viewer.mpr.presets')}
-          value={preset}
-          onChange={(id) => {
-            const next = CT_WINDOW_PRESETS.find((p) => p.id === id);
-            if (next) setCtWindow({ width: next.width, center: next.center });
-          }}
-          options={CT_WINDOW_PRESETS.map((p) => ({
-            value: p.id,
-            label: t(`viewer.mpr.preset.${p.id}`),
-          }))}
-        />
+        {hounsfield && (
+          <Segmented<CtPresetId | 'custom'>
+            aria-label={t('viewer.mpr.presets')}
+            value={preset}
+            onChange={(id) => {
+              const next = CT_WINDOW_PRESETS.find((p) => p.id === id);
+              if (next) setCtWindow({ width: next.width, center: next.center });
+            }}
+            options={CT_WINDOW_PRESETS.map((p) => ({
+              value: p.id,
+              label: t(`viewer.mpr.preset.${p.id}`),
+            }))}
+          />
+        )}
         <span className="viewer-toolbar__value" data-testid="mpr-window">
-          {t('viewer.mpr.window', {
-            width: Math.round(ctWindow.width),
-            center: Math.round(ctWindow.center),
-          })}
+          {ctWindow &&
+            t('viewer.mpr.window', {
+              width: Math.round(ctWindow.width),
+              center: Math.round(ctWindow.center),
+            })}
         </span>
         <Tooltip title={t('viewer.reset')}>
           <Button
@@ -257,7 +282,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
             aria-label={t('viewer.reset')}
             disabled={!ready}
             onClick={() => {
-              setCtWindow(DEFAULT_CT_WINDOW);
+              if (defaultWindow) setCtWindow(defaultWindow);
               engine?.reset();
             }}
           />
@@ -315,7 +340,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
         {status === 'loading' && (
           <div className="mpr-view__status" role="status">
             <Spin />
-            <span>{t('viewer.mpr.loading')}</span>
+            <span>{t(hounsfield ? 'viewer.mpr.loading' : 'viewer.mpr.loadingVolume')}</span>
           </div>
         )}
         {ready && overlayLoading && (
@@ -326,7 +351,7 @@ export function MprView({ volumeUrl, labelmap, notice, focus, onVolumeError }: M
         {status === 'error' && (
           <div className="mpr-view__status mpr-view__status--error" role="alert">
             <WarningOutlined />
-            <span>{t('viewer.mpr.loadError')}</span>
+            <span>{t(hounsfield ? 'viewer.mpr.loadError' : 'viewer.mpr.loadErrorVolume')}</span>
             <Button size="small" icon={<ReloadOutlined />} onClick={retry}>
               {t('common.retry')}
             </Button>

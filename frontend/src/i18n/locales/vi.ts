@@ -21,6 +21,7 @@ export const vi = {
   nav: {
     cases: 'Ca bệnh',
     upload: 'Tải ảnh lên',
+    samples: 'Ca mẫu',
   },
   header: {
     language: 'Ngôn ngữ',
@@ -45,7 +46,8 @@ export const vi = {
     loginFailed: 'Đăng nhập thất bại',
     sessionExpired: 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.',
     features: {
-      upload: 'Tải X-quang PNG/JPG hoặc CT (NIfTI, DICOM) và quản lý ca bệnh',
+      upload:
+        'Tải X-quang (PNG/JPG, DICOM) hoặc ảnh 3D (NIfTI, DICOM, chồng ảnh) và quản lý ca bệnh',
       ai: 'Chạy mô hình AI, theo dõi tiến trình trực tiếp',
       viewer: 'Xem heatmap Grad-CAM, MPR ba mặt cắt và mô hình 3D các cơ quan',
     },
@@ -55,6 +57,9 @@ export const vi = {
     searchPlaceholder: 'Tìm theo mã ca hoặc ghi chú',
     newCase: 'Tạo ca mới',
     empty: 'Chưa có ca nào',
+    noMatch: 'Không có ca nào khớp với tìm kiếm',
+    trySamples: 'Thử ca mẫu',
+    trySamplesHint: 'Chưa có ảnh trong tay? Mở một ca mẫu có sẵn.',
     created: 'Đã tạo ca {{code}}',
     total: 'Tổng {{count}} ca',
     columns: {
@@ -98,6 +103,48 @@ export const vi = {
     duration: 'Thời gian suy luận',
     backToList: 'Danh sách ca',
     notFound: 'Không tìm thấy ca',
+    sampleTag: 'Ca mẫu',
+    inputTypes: {
+      IMAGE_2D: 'Ảnh 2D',
+      DICOM_2D: 'DICOM X-quang',
+      NIFTI: 'NIfTI',
+      DICOM_SERIES: 'Series DICOM',
+      IMAGE_STACK: 'Chồng ảnh',
+    },
+  },
+  samples: {
+    title: 'Ca mẫu',
+    intro:
+      'Các ca có sẵn từ bộ dữ liệu công khai, đã ẩn danh: mở thẳng trong viewer mà không cần tải ảnh lên.',
+    empty: 'Chưa có ca mẫu nào',
+    emptyAdmin: 'Đánh dấu một ca là ca mẫu từ trang chi tiết của ca đó.',
+    segmented: 'Đã phân đoạn',
+    analysed: 'Đã có kết quả AI',
+    open: 'Mở',
+    openStudy: 'Mở {{title}} ({{modality}}) trong viewer',
+    caseLink: 'Ca {{code}}',
+    source: 'Nguồn',
+    noStudies: 'Ca này chưa có ảnh',
+    thumbnailAlt: 'Ảnh thu nhỏ của {{title}}',
+    admin: {
+      section: 'Ca mẫu',
+      notSample: 'Ca này không nằm trong thư viện ca mẫu.',
+      mark: 'Đánh dấu là ca mẫu',
+      edit: 'Sửa thông tin ca mẫu',
+      unmark: 'Bỏ khỏi ca mẫu',
+      unmarkConfirm: 'Bỏ ca này khỏi thư viện ca mẫu?',
+      remove: 'Bỏ',
+      marked: 'Đã đánh dấu ca mẫu',
+      unmarked: 'Đã bỏ ca khỏi ca mẫu',
+      save: 'Lưu',
+      title: 'Tiêu đề',
+      description: 'Mô tả',
+      source: 'Nguồn / giấy phép',
+      sourcePlaceholder:
+        'Bộ dữ liệu, giấy phép, trích dẫn – ví dụ: TotalSegmentator dataset (Zenodo 10047263), CC BY 4.0',
+      required: 'Bắt buộc nhập',
+      tooLong: 'Tối đa {{max}} ký tự',
+    },
   },
   upload: {
     title: 'Tải ảnh lên',
@@ -111,15 +158,36 @@ export const vi = {
     orCreate: 'hoặc',
     createCase: 'Tạo ca mới',
     selectedCase: 'Ca đã chọn',
-    dropTitle: 'Kéo thả ảnh X-quang hoặc CT vào đây, hoặc nhấn để chọn',
+    dropTitle: 'Kéo thả ảnh X-quang hoặc ảnh 3D vào đây, hoặc nhấn để chọn',
     dropHint:
-      'Một ảnh X-quang PNG/JPG (tối đa 50 MB) hoặc một CT: NIfTI .nii/.nii.gz hay ZIP chứa một series DICOM (tối đa 500 MB)',
-    invalidType: 'Chỉ chấp nhận ảnh PNG/JPG, NIfTI (.nii, .nii.gz) hoặc ZIP chứa DICOM',
+      'Một ảnh X-quang PNG/JPG hoặc DICOM .dcm (tối đa 50 MB), hoặc một ảnh 3D: NIfTI .nii/.nii.gz, ZIP chứa một series DICOM hay chứa các lát PNG/JPG (tối đa 500 MB)',
+    invalidType:
+      'Chỉ chấp nhận ảnh PNG/JPG, DICOM X-quang (.dcm), NIfTI (.nii, .nii.gz) hoặc tệp ZIP',
     tooLarge: 'Ảnh vượt quá 50 MB',
-    tooLargeVolume: 'Tệp CT vượt quá 500 MB',
+    tooLargeVolume: 'Tệp ảnh 3D vượt quá 500 MB',
     kinds: {
       image: 'Ảnh 2D',
+      dicom: 'DICOM X-quang',
       volume: 'CT 3D',
+      stack: 'Chồng ảnh 3D',
+    },
+    zip: {
+      label: 'Tệp ZIP chứa gì?',
+      dicomSeries: 'Một series DICOM (CT/MR)',
+      imageStack: 'Các lát PNG/JPG, mỗi lát một ảnh (ít nhất 20 ảnh)',
+      imageStackHint:
+        'Các lát được xếp theo tên tệp theo thứ tự tự nhiên (img2 trước img10); tệp đầu tiên là lát thấp nhất (phía chân), và bên trái mỗi ảnh là bên phải của bệnh nhân.',
+    },
+    spacing: {
+      legend: 'Khoảng cách voxel (không bắt buộc)',
+      hint: 'Đơn vị mm, mỗi giá trị từ {{min}} đến {{max}}. Nhập đủ cả ba hoặc để trống cả ba.',
+      x: 'Khoảng cách điểm ảnh x (cột)',
+      y: 'Khoảng cách điểm ảnh y (hàng)',
+      z: 'Khoảng cách lát z',
+      range: 'Nhập giá trị từ {{min}} đến {{max}} mm',
+      incomplete: 'Nhập đủ cả ba giá trị hoặc để trống cả ba',
+      assumedWarning:
+        'Không nhập khoảng cách thì máy chủ giả định 1 mm theo mọi hướng: khoảng cách và thể tích đo được sẽ không chính xác.',
     },
     empty: 'Tệp rỗng',
     modality: 'Loại chụp',
@@ -128,13 +196,18 @@ export const vi = {
     removeFile: 'Bỏ chọn',
     phases: {
       initializing: 'Khởi tạo phiên tải lên…',
-      uploading: 'Đang tải ảnh lên kho lưu trữ…',
+      uploading: 'Đang tải tệp lên kho lưu trữ…',
       completing: 'Xác nhận tải lên…',
       processing: 'Máy chủ đang xử lý ảnh (kiểm tra định dạng, chuẩn hóa, tạo thumbnail)…',
       processingVolume:
         'Máy chủ đang xử lý CT (giải nén, chọn series, chuẩn hóa hướng và HU, tạo thumbnail)…',
+      processingDicom:
+        'Máy chủ đang giải mã ảnh DICOM X-quang (dữ liệu điểm ảnh, rescale, cửa sổ, tạo thumbnail)…',
+      processingStack:
+        'Máy chủ đang dựng volume từ các lát (sắp xếp, kiểm tra kích thước, ghép lát, tạo thumbnail)…',
       done: 'Ảnh đã sẵn sàng',
       doneVolume: 'CT đã sẵn sàng',
+      doneStack: 'Volume từ chồng ảnh đã sẵn sàng',
       failed: 'Tải lên thất bại',
     },
     status: {
@@ -150,12 +223,18 @@ export const vi = {
     chooseModel: 'Mô hình',
     another: 'Tải ảnh khác',
     tryAgain: 'Thử lại',
+    cancel: 'Huỷ tải lên',
+    partsProgress: 'Đã tải {{done}}/{{total}} phần',
     progressLabel: 'Tiến độ tải lên',
     processingLabel: 'Tiến độ xử lý trên máy chủ',
     errors: {
       processing: 'Máy chủ không xử lý được tệp',
       timeout: 'Máy chủ xử lý ảnh quá lâu. Hãy thử tải lên lại.',
+      timeoutDicom: 'Máy chủ xử lý ảnh DICOM quá 5 phút. Hãy thử tải lên lại.',
       timeoutVolume: 'Máy chủ xử lý CT quá 10 phút. Hãy thử tải lên lại.',
+      partStatus: 'Kho lưu trữ từ chối phần {{part}} của tệp (HTTP {{status}}). Hãy thử lại.',
+      partNetwork:
+        'Không tải được phần {{part}} của tệp (kho lưu trữ không trả lời hợp lệ). Hãy thử lại.',
       invalidResponse: 'Máy chủ không trả về địa chỉ tải lên. Hãy thử lại.',
     },
   },
@@ -175,6 +254,8 @@ export const vi = {
     studyNotFound: 'Không tìm thấy ca chụp',
     backToCase: 'Về ca bệnh',
     webglRequired: 'Trình duyệt này không hiển thị được ảnh 3D (cần WebGL 2).',
+    spacingAssumed: 'Khoảng cách lát giả định 1 mm – số đo không chính xác.',
+    spacingAssumedTag: 'giả định',
     tabs: {
       mpr: 'MPR',
       mesh: '3D',
@@ -198,6 +279,8 @@ export const vi = {
       },
       loading: 'Đang tải volume CT…',
       loadError: 'Không tải được volume CT',
+      loadingVolume: 'Đang tải volume…',
+      loadErrorVolume: 'Không tải được volume',
       overlayLoading: 'Đang tải phân đoạn…',
       overlayError: 'Không tải được mặt nạ phân đoạn',
       labelOrderUnknown:
@@ -243,7 +326,7 @@ export const vi = {
   ai: {
     title: 'Phân tích AI',
     model: 'Mô hình',
-    noModels: 'Chưa có mô hình cho loại ca chụp này',
+    noModels: 'Chưa có model AI cho loại ảnh này',
     threshold: 'Ngưỡng',
     run: 'Chạy AI',
     runSegmentation: 'Chạy phân đoạn',

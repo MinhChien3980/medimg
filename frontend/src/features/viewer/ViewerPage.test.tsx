@@ -4,7 +4,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { InputType, StudyDto } from '@/api/types';
 import { useAuthStore } from '@/features/auth/authStore';
 import { createFakeBackends } from '@/test/fakeVolumeBackends';
-import { ctStudy, model, segModel, study, tokens } from '@/test/fixtures';
+import {
+  ctStudy,
+  dicomXrayStudy,
+  model,
+  segModel,
+  stackStudy,
+  study,
+  tokens,
+} from '@/test/fixtures';
 import { renderWithProviders } from '@/test/render';
 import { API, server } from '@/test/server';
 import { VolumeBackendsContext } from './volume/backends';
@@ -18,7 +26,8 @@ function serve(s: StudyDto) {
     mock.get(`${API}/models`, ({ request }) => {
       const inputType = new URL(request.url).searchParams.get('inputType') ?? '';
       models.push(inputType);
-      return HttpResponse.json(inputType === 'IMAGE_2D' ? [model] : [segModel]);
+      if (inputType === 'IMAGE_STACK') return HttpResponse.json([]);
+      return HttpResponse.json(inputType.endsWith('_2D') ? [model] : [segModel]);
     }),
   );
   return models;
@@ -69,4 +78,24 @@ describe('ViewerPage routing by input type', () => {
       expect(models).toContain(inputType);
     },
   );
+
+  it('shows a DICOM X-ray in the 2D canvas viewer with the X-ray models', async () => {
+    const models = serve(dicomXrayStudy);
+    const fake = renderViewer(dicomXrayStudy);
+
+    expect(await screen.findByRole('img', { name: 'DX CHEST' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'MPR' })).not.toBeInTheDocument();
+    expect(fake.engines).toHaveLength(0);
+    await screen.findByRole('button', { name: /Run AI/ });
+    expect(models).toEqual(['DICOM_2D']);
+  });
+
+  it('opens an image stack in MPR', async () => {
+    const models = serve(stackStudy);
+    const fake = renderViewer(stackStudy);
+
+    expect(await screen.findByRole('tab', { name: 'MPR' })).toBeInTheDocument();
+    await waitFor(() => expect(fake.engines[0]?.loads).toEqual([stackStudy.series[0]?.volumeUrl]));
+    expect(models).toContain('IMAGE_STACK');
+  });
 });

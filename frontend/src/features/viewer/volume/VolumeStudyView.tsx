@@ -1,7 +1,7 @@
-import { Empty, Tabs, Tag } from 'antd';
+import { Alert, Empty, Tabs, Tag, Tooltip } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PredictionDto, SeriesDto } from '@/api/types';
+import { hasHounsfieldUnits, type PredictionDto, type SeriesDto } from '@/api/types';
 import { AiPanel } from '@/features/ai/AiPanel';
 import { isSegmentationResult } from '@/features/ai/findings';
 import { useModels } from '@/features/ai/hooks';
@@ -38,8 +38,10 @@ function segmentationOf(run: PredictionDto | undefined, series: SeriesDto | unde
 }
 
 /**
- * CT volume study: tabs MPR | 3D sharing the structures of the selected segmentation run
- * (visibility, colour and opacity apply to both). Locating a structure, from the list or by
+ * Volume study (CT, MR, image stack): tabs MPR | 3D sharing the structures of the selected
+ * segmentation run (visibility, colour and opacity apply to both). A volume that is not a CT in
+ * Hounsfield units gets no CT window presets, and no 3D tab while it has no meshes (no model
+ * segments it). A spacing the server had to assume is flagged above the views. Locating a structure, from the list or by
  * clicking its mesh, switches to MPR and moves the crosshair to its centroid. Centroids and
  * meshes are in LPS mm, the world space Cornerstone3D derives from the NIfTI affine, so the
  * point is passed through unchanged.
@@ -54,6 +56,7 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
   const models = useModels(study.inputType);
 
   const series = study.series.find((s) => s.id === seriesId) ?? study.series[0];
+  const hounsfield = hasHounsfieldUnits(study.inputType, series?.modality ?? study.modality);
   const run = segmentationOf(prediction.data, series);
   const labelOrder = run ? findLabelOrder(models.data, run) : null;
   const structures = useMemo(
@@ -112,6 +115,9 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
     [structures],
   );
 
+  const show3d = hounsfield || structures.length > 0;
+  const activeTab: VolumeTab = show3d ? tab : 'mpr';
+
   const renderSegmentation = (p: PredictionDto) =>
     p.jobId === run?.jobId ? (
       <StructureControls
@@ -136,9 +142,18 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
       />
 
       <section className="viewer-page__center">
+        {series?.spacingAssumed && (
+          <Alert
+            className="volume-notice"
+            type="warning"
+            showIcon
+            banner
+            title={t('viewer.spacingAssumed')}
+          />
+        )}
         <Tabs
           className="volume-tabs"
-          activeKey={tab}
+          activeKey={activeTab}
           onChange={(key) => setTab(key as VolumeTab)}
           tabBarExtraContent={
             <span className="volume-tabs__info">
@@ -146,7 +161,12 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
               <Tag>{study.bodyPart}</Tag>
               {series?.dims && <Tag>{series.dims.join('×')}</Tag>}
               {series?.spacing && (
-                <Tag>{series.spacing.map((v) => v.toFixed(2)).join(' × ')} mm</Tag>
+                <Tooltip title={series.spacingAssumed ? t('viewer.spacingAssumed') : undefined}>
+                  <Tag color={series.spacingAssumed ? 'warning' : undefined}>
+                    {series.spacing.map((v) => v.toFixed(2)).join(' × ')} mm
+                    {series.spacingAssumed && ` (${t('viewer.spacingAssumedTag')})`}
+                  </Tag>
+                </Tooltip>
               )}
             </span>
           }
@@ -158,6 +178,7 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
                 <MprView
                   key={series.id}
                   volumeUrl={series.volumeUrl}
+                  hounsfield={hounsfield}
                   labelmap={labelmap}
                   notice={notice}
                   focus={focus}
@@ -186,7 +207,7 @@ export function VolumeStudyView({ study, refetchStudy, refreshBudget }: StudyVie
                   />
                 ),
             },
-          ]}
+          ].filter((item) => item.key !== '3d' || show3d)}
         />
       </section>
 

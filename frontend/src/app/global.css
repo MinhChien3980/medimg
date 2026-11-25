@@ -330,6 +330,133 @@ body {
   }
 }
 
+/* ---------- Upload: ZIP content, slice spacing, cancel ---------- */
+.zip-content {
+  margin-top: 16px;
+}
+
+.zip-content__hint {
+  font-size: 12px;
+  margin: 8px 0 0 !important;
+}
+
+.spacing-fields {
+  margin: 12px 0 0;
+  padding: 12px 16px 4px;
+  border: 1px solid #d9e2e8;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.spacing-fields__legend {
+  padding: 0 4px;
+  font-weight: 500;
+}
+
+.spacing-fields__hint {
+  font-size: 12px;
+  margin-bottom: 8px !important;
+}
+
+.spacing-fields__row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.spacing-fields .ant-alert {
+  margin-bottom: 12px;
+}
+
+.process-step__actions {
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .spacing-fields__row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+/* ---------- Sample cases ---------- */
+.sample-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.sample-grid > li {
+  display: flex;
+}
+
+.sample-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.sample-card > .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.sample-card__cover {
+  position: relative;
+}
+
+.sample-card__thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: #000;
+  color: #5b6b78;
+  font-size: 40px;
+}
+
+.sample-card__badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+}
+
+.sample-card__title {
+  margin: 0 0 8px !important;
+}
+
+.sample-card__tags {
+  margin-bottom: 8px;
+}
+
+.sample-card__source {
+  font-size: 12px;
+}
+
+.sample-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: auto;
+}
+
+.page__title-tag {
+  margin-inline-start: 12px;
+  vertical-align: middle;
+}
+
+.cases-empty__samples {
+  font-weight: 500;
+}
+
 /* ---------- Case detail ---------- */
 .study-list {
   display: grid;
@@ -526,6 +653,10 @@ body {
 }
 
 /* ---------- Volume viewer (MPR | 3D) ---------- */
+.volume-notice {
+  flex: none;
+}
+
 .viewer-page--loading {
   display: block;
   padding: 24px;

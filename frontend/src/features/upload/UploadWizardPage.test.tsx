@@ -199,10 +199,10 @@ describe('UploadWizardPage', () => {
     await waitFor(() => expect(next).toBeEnabled());
     await user.click(next);
 
-    await user.upload(fileInput(), new File(['x'], 'scan.dcm', { type: 'application/dicom' }));
+    await user.upload(fileInput(), new File(['x'], 'scan.nrrd', { type: '' }));
     expect(
       await screen.findByText(
-        'Only PNG/JPG images, NIfTI (.nii, .nii.gz) or a ZIP of DICOM files are accepted',
+        'Only PNG/JPG images, DICOM X-rays (.dcm), NIfTI (.nii, .nii.gz) or a ZIP file are accepted',
       ),
     ).toBeInTheDocument();
 
@@ -488,7 +488,7 @@ describe('UploadWizardPage', () => {
       const big = niftiFile();
       Object.defineProperty(big, 'size', { value: MAX_UPLOAD_BYTES.volume + 1 });
       await user.upload(fileInput(), big);
-      expect(await screen.findByText('The CT file exceeds 500 MB')).toBeInTheDocument();
+      expect(await screen.findByText('The 3D scan exceeds 500 MB')).toBeInTheDocument();
       expect(screen.queryByTestId('picked-file')).not.toBeInTheDocument();
     });
   });

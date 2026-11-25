@@ -8,6 +8,7 @@ import type {
   MprEngineEvents,
   MprLabelmap,
   MprTool,
+  VolumeStats,
 } from '@/features/viewer/volume/mpr/MprEngine';
 import type { CtWindow } from '@/features/viewer/lib/ctWindow';
 import type { Rgba } from '@/features/viewer/volume/structures';
@@ -25,15 +26,17 @@ export class FakeMprEngine implements MprEngine {
   resets = 0;
   destroyed = 0;
   failLoad = false;
+  /** Voxel range reported for every loaded volume (CT-like by default). */
+  range: [number, number] = [-1024, 3071];
   readonly events: MprEngineEvents;
 
   constructor(events: MprEngineEvents) {
     this.events = events;
   }
 
-  loadVolume(url: string): Promise<void> {
+  loadVolume(url: string): Promise<VolumeStats> {
     this.loads.push(url);
-    if (!this.failLoad) return Promise.resolve();
+    if (!this.failLoad) return Promise.resolve({ range: this.range });
     this.failLoad = false;
     return Promise.reject(new Error('load failed'));
   }
@@ -94,13 +97,17 @@ function FakeMeshScene({ structures, clipPlanes, onBoundsChange, onPick }: MeshS
   );
 }
 
-export function createFakeBackends({ failFirstLoad = false } = {}) {
+export function createFakeBackends({
+  failFirstLoad = false,
+  range,
+}: { failFirstLoad?: boolean; range?: [number, number] } = {}) {
   const engines: FakeMprEngine[] = [];
   const backends: VolumeBackends = {
     loadMprEngine: () =>
       Promise.resolve((_elements, events) => {
         const engine = new FakeMprEngine(events);
         engine.failLoad = failFirstLoad;
+        if (range) engine.range = range;
         engines.push(engine);
         return engine;
       }),

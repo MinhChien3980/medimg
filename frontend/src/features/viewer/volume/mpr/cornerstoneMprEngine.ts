@@ -31,7 +31,7 @@ import {
 } from '@cornerstonejs/nifti-volume-loader';
 import type { Vec3 } from '@/api/types';
 import { absoluteUrl } from './niftiUrl';
-import { DEFAULT_CT_WINDOW, fromVoiRange, toVoiRange, type CtWindow } from '../../lib/ctWindow';
+import { fromVoiRange, toVoiRange, type CtWindow } from '../../lib/ctWindow';
 import type { Rgba } from '../structures';
 import {
   MPR_ORIENTATIONS,
@@ -42,6 +42,7 @@ import {
   type MprLabelmap,
   type MprOrientation,
   type MprTool,
+  type VolumeStats,
 } from './MprEngine';
 
 const NIFTI_SCHEME = 'nifti';
@@ -133,7 +134,7 @@ class CornerstoneMprEngine implements MprEngine {
   private volumeId: string | null = null;
   private labelmapVolume: CachedVolume | null = null;
   private colorLutIndex: number | null = null;
-  private window: CtWindow = DEFAULT_CT_WINDOW;
+  private window: CtWindow | null = null;
   private tool: MprTool = 'crosshairs';
   private opacity = 0.5;
   private lut: Rgba[] = [];
@@ -172,9 +173,9 @@ class CornerstoneMprEngine implements MprEngine {
     this.listen();
   }
 
-  loadVolume(url: string): Promise<void> {
+  loadVolume(url: string): Promise<VolumeStats> {
     return this.enqueue(async () => {
-      const volume = await this.createVolume(url, 'ct');
+      const volume = await this.createVolume(url, 'volume');
       this.volumeId = volume.volumeId;
       await setVolumesForViewports(
         this.renderingEngine,
@@ -185,11 +186,12 @@ class CornerstoneMprEngine implements MprEngine {
       this.applyWindow();
       this.applyTool();
       this.renderingEngine.render();
-    });
+      return { range: scalarRange(cache.getVolume(volume.volumeId)) };
+    }, NO_STATS);
   }
 
   setLabelmap(labelmap: MprLabelmap | null): Promise<void> {
-    return this.enqueue(async () => {
+    return this.enqueue<void>(async () => {
       this.removeLabelmap();
       if (!labelmap || !this.volumeId) return;
       this.lut = labelmap.colorLut;
@@ -220,7 +222,7 @@ class CornerstoneMprEngine implements MprEngine {
       );
       this.applyLabelmapStyle();
       this.renderingEngine.render();
-    });
+    }, undefined);
   }
 
   styleLabelmap(colorLut: Rgba[], hidden: number[]): void {
@@ -235,7 +237,7 @@ class CornerstoneMprEngine implements MprEngine {
   }
 
   setWindow(window: CtWindow): void {
-    if (window.width === this.window.width && window.center === this.window.center) return;
+    if (window.width === this.window?.width && window.center === this.window.center) return;
     this.window = window;
     if (this.volumeId && !this.destroyed) {
       this.applyWindow();
@@ -264,9 +266,6 @@ class CornerstoneMprEngine implements MprEngine {
     for (const id of Object.values(this.viewportIds)) {
       this.renderingEngine.getViewport(id).resetCamera();
     }
-    this.window = DEFAULT_CT_WINDOW;
-    this.applyWindow();
-    this.events.onWindowChange?.(this.window);
     this.crosshairs()?.resetCrosshairs();
     this.renderingEngine.render();
   }
@@ -288,15 +287,18 @@ class CornerstoneMprEngine implements MprEngine {
 
   // ---------- internals ----------
 
-  /** Runs operations one after another, so a labelmap never races its volume. */
-  private enqueue(operation: () => Promise<void>): Promise<void> {
+  /**
+   * Runs operations one after another, so a labelmap never races its volume. An operation cut
+   * short by `destroy` resolves with `whenDestroyed` (nobody is left to care about its result).
+   */
+  private enqueue<T>(operation: () => Promise<T>, whenDestroyed: T): Promise<T> {
     const run = this.queue.then(() => {
       this.assertAlive();
       return operation();
     });
     this.queue = run.catch(() => undefined);
     return run.catch((error: unknown) => {
-      if (error instanceof EngineDestroyedError) return;
+      if (error instanceof EngineDestroyedError) return whenDestroyed;
       throw error;
     });
   }
@@ -305,7 +307,7 @@ class CornerstoneMprEngine implements MprEngine {
     if (this.destroyed) throw new EngineDestroyedError();
   }
 
-  private async createVolume(url: string, kind: 'ct' | 'labelmap'): Promise<CachedVolume> {
+  private async createVolume(url: string, kind: 'volume' | 'labelmap'): Promise<CachedVolume> {
     const absolute = absoluteUrl(url);
     await assertReachable(absolute);
     this.assertAlive();
@@ -389,9 +391,11 @@ class CornerstoneMprEngine implements MprEngine {
   }
 
   private applyWindow(): void {
+    const window = this.window;
+    if (!window) return;
     for (const id of Object.values(this.viewportIds)) {
       const viewport = this.renderingEngine.getViewport<Types.IVolumeViewport>(id);
-      viewport.setProperties({ voiRange: toVoiRange(this.window) });
+      viewport.setProperties({ voiRange: toVoiRange(window) });
     }
   }
 
@@ -450,7 +454,8 @@ class CornerstoneMprEngine implements MprEngine {
 
     const onVoi = (evt: Event) => {
       const range = (evt as CustomEvent<{ range?: Types.VOIRange }>).detail.range;
-      if (!range) return;
+      // No window chosen yet: Cornerstone's default stands until the view sets one.
+      if (!range || !this.window) return;
       const next = fromVoiRange(range);
       if (
         Math.abs(next.width - this.window.width) < 0.5 &&
@@ -494,6 +499,30 @@ class CornerstoneMprEngine implements MprEngine {
       window.removeEventListener('pointercancel', onUp, true);
     });
   }
+}
+
+const NO_STATS: VolumeStats = { range: [0, 0] };
+
+interface RangeSource {
+  getRange?: () => [number, number];
+  getMinMax?: () => { min: unknown; max: unknown };
+}
+
+/**
+ * Lowest and highest voxel value of a loaded volume. The voxel manager of a streamed volume keeps
+ * the range of every slice image (cheap); a full scan of the voxels is the fallback.
+ */
+function scalarRange(volume: { voxelManager?: unknown } | undefined): [number, number] {
+  const voxels = volume?.voxelManager as RangeSource | undefined;
+  const fast = voxels?.getRange?.();
+  if (fast && Number.isFinite(fast[0]) && Number.isFinite(fast[1]) && fast[1] > fast[0]) {
+    return [fast[0], fast[1]];
+  }
+  const scanned = voxels?.getMinMax?.();
+  if (typeof scanned?.min === 'number' && typeof scanned.max === 'number') {
+    return [scanned.min, scanned.max];
+  }
+  return fast ?? NO_STATS.range;
 }
 
 /** Object path of a presigned URL, for error messages (the signature is not logged). */

@@ -30,22 +30,29 @@ export interface MprEngineEvents {
   onWindowChange?: (window: CtWindow) => void;
 }
 
+/** What the engine learnt about a loaded volume. */
+export interface VolumeStats {
+  /** Lowest and highest voxel value. */
+  range: [number, number];
+}
+
 export interface MprEngine {
   /** Resolves once the volume is displayed; rejects when it cannot be loaded. */
-  loadVolume(url: string): Promise<void>;
+  loadVolume(url: string): Promise<VolumeStats>;
   /** Resolves once the labelmap is displayed (or removed, for null). */
   setLabelmap(labelmap: MprLabelmap | null): Promise<void>;
   /** Colours and visibility of the current labelmap, without reloading it. */
   styleLabelmap(colorLut: Rgba[], hidden: number[]): void;
   /** 0..1, applied on top of the per-structure opacity. */
   setLabelmapOpacity(opacity: number): void;
+  /** Until a window is set the volume shows with Cornerstone's own default VOI. */
   setWindow(window: CtWindow): void;
   setTool(tool: MprTool): void;
   /** Moves the crosshair (and the slice of every view) to a point in LPS mm. */
   jumpTo(point: Vec3): void;
   /** Scrolls one view by whole slices. */
   scroll(orientation: MprOrientation, delta: number): void;
-  /** Camera, window and crosshair back to their initial state. */
+  /** Camera and crosshair back to their initial state (the window is the caller's to reset). */
   reset(): void;
   resize(): void;
   /** Releases the rendering engine, tools and cached volumes. Idempotent. */

@@ -5,6 +5,7 @@ import LoginPage from '@/features/auth/LoginPage';
 import CaseDetailPage from '@/features/cases/CaseDetailPage';
 import CasesListPage from '@/features/cases/CasesListPage';
 import AppLayout from '@/features/layout/AppLayout';
+import SamplesPage from '@/features/samples/SamplesPage';
 import NotFoundPage from '@/shared/components/NotFoundPage';
 import RouteErrorPage from '@/shared/components/RouteErrorPage';
 import { UploadWizardRoute, ViewerRoute } from './lazyPages';
@@ -23,6 +24,7 @@ export const routes: RouteObject[] = [
       { index: true, element: <Navigate to="/cases" replace /> },
       { path: 'cases', element: <CasesListPage /> },
       { path: 'cases/:caseId', element: <CaseDetailPage /> },
+      { path: 'samples', element: <SamplesPage /> },
       {
         path: 'upload',
         element: (

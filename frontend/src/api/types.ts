@@ -62,6 +62,16 @@ export interface Page<T> {
 
 export type Sex = 'M' | 'F' | 'O';
 
+/** Presentation of a case marked as a sample case (`sample_title IS NOT NULL` on the server). */
+export interface SampleInfo {
+  /** 1..120 characters. */
+  title: string;
+  /** Up to 500 characters. */
+  description: string | null;
+  /** Source and licence, 1..300 characters (e.g. dataset, licence, citation). */
+  source: string;
+}
+
 export interface PatientDto {
   id: Uuid;
   code: string;
@@ -70,6 +80,8 @@ export interface PatientDto {
   note: string | null;
   studyCount: number;
   createdAt: IsoDateTime;
+  /** Set when an admin marked the case as a sample case; null otherwise. */
+  sample: SampleInfo | null;
 }
 
 export interface CreatePatientRequest {
@@ -83,6 +95,13 @@ export interface UpdatePatientRequest {
   birthYear?: number;
   sex?: Sex;
   note?: string;
+}
+
+/** `PUT /patients/{id}/sample` (ADMIN). */
+export interface MarkSampleRequest {
+  title: string;
+  description?: string;
+  source: string;
 }
 
 export interface PatientQuery {
@@ -105,19 +124,60 @@ export interface InitUploadRequest {
   files: UploadFileSpec[];
   modalityHint?: string;
   bodyPartHint?: string;
+  /**
+   * Voxel spacing `[sx, sy, sz]` in mm (each 0.01..20) for a ZIP of PNG/JPG slices. Ignored for
+   * any other content. Without it the server assumes 1 mm and flags the series `spacingAssumed`.
+   */
+  sliceSpacingMm?: Vec3;
+}
+
+/** One presigned S3 `UploadPart` URL. */
+export interface UploadPartTarget {
+  /** 1-based, as in S3. */
+  partNumber: number;
+  url: string;
+}
+
+/**
+ * Multipart plan for a large file (over 64 MB): part `n` is bytes `[(n-1)·partSize, n·partSize)`
+ * of the file, the last part being shorter.
+ */
+export interface MultipartPlan {
+  /** Bytes per part (32 MiB); at least 5 MiB, as S3 requires for every part but the last. */
+  partSize: number;
+  parts: UploadPartTarget[];
 }
 
 export interface InitUploadFile {
   fileId: Uuid;
   name: string;
-  /** Presigned S3 PUT URL (same origin, under `/medimg/**`). */
-  putUrl: string;
+  /**
+   * Presigned S3 PUT URL (same origin, under `/medimg/**`) for a single PUT of the whole file;
+   * null when the file is uploaded in parts (`multipart`).
+   */
+  putUrl: string | null;
+  /** Present (and `putUrl` null) when the file must be uploaded in parts. */
+  multipart?: MultipartPlan | null;
   expiresAt: IsoDateTime;
 }
 
 export interface InitUploadResponse {
   uploadId: Uuid;
   files: InitUploadFile[];
+}
+
+/** One uploaded part. `etag` is the `ETag` response header of its PUT, quotes included. */
+export interface CompletedPart {
+  partNumber: number;
+  etag: string;
+}
+
+/**
+ * Body of `POST /uploads/{id}/complete`: required for multipart files (parts in ascending order),
+ * forbidden for files uploaded with a single PUT (the request then has no body).
+ */
+export interface CompleteUploadRequest {
+  files: Array<{ fileId: Uuid; parts: CompletedPart[] }>;
 }
 
 export type UploadStatus = 'INIT' | 'UPLOADED' | 'PROCESSING' | 'DONE' | 'FAILED';
@@ -129,14 +189,22 @@ export interface UploadDto {
   studyId: Uuid | null;
   /** Server-side processing progress, 0..100. */
   progress: number;
-  /** Detected from the file's magic bytes; null until the server has identified it. */
+  /**
+   * Null until the server has identified the content: known at completion for a single file
+   * (e.g. `DICOM_2D`), only once DONE for a ZIP (`DICOM_SERIES` or `IMAGE_STACK`, which the
+   * ingest worker decides from what it holds).
+   */
   inputType: InputType | null;
 }
 
 // ---------- Studies ----------
 
-/** `IMAGE_2D`: PNG/JPG. `NIFTI` / `DICOM_SERIES`: CT volume, normalised to one NIfTI file. */
-export type InputType = 'IMAGE_2D' | 'NIFTI' | 'DICOM_SERIES';
+/**
+ * 2D: `IMAGE_2D` (PNG/JPG), `DICOM_2D` (one DICOM X-ray, normalised to an 8-bit PNG).
+ * Volumes, all normalised to one NIfTI file: `NIFTI`, `DICOM_SERIES` (ZIP of a DICOM series) and
+ * `IMAGE_STACK` (ZIP of PNG/JPG slices; intensities are not Hounsfield units).
+ */
+export type InputType = 'IMAGE_2D' | 'DICOM_2D' | 'NIFTI' | 'DICOM_SERIES' | 'IMAGE_STACK';
 
 /** `[x, y, z]`. In patient space: LPS millimetres (the DICOM convention Cornerstone3D uses). */
 export type Vec3 = [number, number, number];
@@ -157,6 +225,11 @@ export interface SeriesDto {
   dims: Vec3 | null;
   /** Voxel spacing `[sx, sy, sz]` in mm; null for 2D. */
   spacing: Vec3 | null;
+  /**
+   * True when `spacing` is the 1 mm default the server assumed (an image stack uploaded without
+   * slice spacing): distances and volumes measured on it are not real. False otherwise.
+   */
+  spacingAssumed: boolean;
 }
 
 export interface StudyDto {
@@ -167,6 +240,28 @@ export interface StudyDto {
   bodyPart: string;
   createdAt: IsoDateTime;
   series: SeriesDto[];
+}
+
+// ---------- Sample cases ----------
+
+export interface SampleStudyDto {
+  studyId: Uuid;
+  inputType: InputType;
+  modality: string;
+  /** Presigned GET URL, valid for 15 minutes. */
+  thumbnailUrl: string;
+  /** Most recent AI run of the study, if any. */
+  latestPrediction: { jobId: Uuid; modelCode: string; status: PredictionStatus } | null;
+}
+
+/** `GET /samples` item (every role), sorted by title. */
+export interface SampleCaseDto {
+  patientId: Uuid;
+  code: string;
+  title: string;
+  description: string | null;
+  source: string;
+  studies: SampleStudyDto[];
 }
 
 // ---------- Models ----------
@@ -285,9 +380,17 @@ export function isTerminalUpload(status: UploadStatus): boolean {
   return TERMINAL_UPLOAD_STATUSES.includes(status);
 }
 
-export const VOLUME_INPUT_TYPES: readonly InputType[] = ['NIFTI', 'DICOM_SERIES'];
+export const VOLUME_INPUT_TYPES: readonly InputType[] = ['NIFTI', 'DICOM_SERIES', 'IMAGE_STACK'];
 
-/** NIfTI and DICOM series studies are both served as one normalised NIfTI volume. */
+/** NIfTI, DICOM series and image stack studies are all served as one normalised NIfTI volume. */
 export function isVolumeInput(inputType: InputType | null | undefined): boolean {
   return !!inputType && VOLUME_INPUT_TYPES.includes(inputType);
+}
+
+/**
+ * Whether a volume's intensities are Hounsfield units, so CT window presets make sense: a CT
+ * series read from DICOM or NIfTI. An image stack is never in HU, whatever its modality.
+ */
+export function hasHounsfieldUnits(inputType: InputType, modality: string): boolean {
+  return inputType !== 'IMAGE_STACK' && modality.toUpperCase() === 'CT';
 }

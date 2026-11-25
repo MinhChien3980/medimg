@@ -22,6 +22,7 @@ export const en: Messages = {
   nav: {
     cases: 'Cases',
     upload: 'Upload',
+    samples: 'Sample cases',
   },
   header: {
     language: 'Language',
@@ -46,7 +47,8 @@ export const en: Messages = {
     loginFailed: 'Sign-in failed',
     sessionExpired: 'Your session has expired, please sign in again.',
     features: {
-      upload: 'Upload PNG/JPG X-rays or CT scans (NIfTI, DICOM) and manage cases',
+      upload:
+        'Upload X-rays (PNG/JPG, DICOM) or 3D scans (NIfTI, DICOM, image stacks) and manage cases',
       ai: 'Run AI models and follow progress live',
       viewer: 'Review Grad-CAM heatmaps, three-plane MPR and 3D organ models',
     },
@@ -56,6 +58,9 @@ export const en: Messages = {
     searchPlaceholder: 'Search by case code or note',
     newCase: 'New case',
     empty: 'No cases yet',
+    noMatch: 'No cases match the search',
+    trySamples: 'Try a sample case',
+    trySamplesHint: 'No images at hand? Open one of the ready-made sample cases.',
     created: 'Case {{code}} created',
     total: '{{count}} cases',
     columns: {
@@ -99,6 +104,48 @@ export const en: Messages = {
     duration: 'Inference time',
     backToList: 'Cases',
     notFound: 'Case not found',
+    sampleTag: 'Sample case',
+    inputTypes: {
+      IMAGE_2D: '2D image',
+      DICOM_2D: 'DICOM X-ray',
+      NIFTI: 'NIfTI',
+      DICOM_SERIES: 'DICOM series',
+      IMAGE_STACK: 'Image stack',
+    },
+  },
+  samples: {
+    title: 'Sample cases',
+    intro:
+      'Ready-made, de-identified cases from public datasets: open one in the viewer without uploading anything.',
+    empty: 'No sample cases yet',
+    emptyAdmin: 'Mark a case as a sample from its case page.',
+    segmented: 'Segmented',
+    analysed: 'AI result available',
+    open: 'Open',
+    openStudy: 'Open {{title}} ({{modality}}) in the viewer',
+    caseLink: 'Case {{code}}',
+    source: 'Source',
+    noStudies: 'This case has no images yet',
+    thumbnailAlt: 'Thumbnail of {{title}}',
+    admin: {
+      section: 'Sample case',
+      notSample: 'This case is not in the sample gallery.',
+      mark: 'Mark as sample',
+      edit: 'Edit sample details',
+      unmark: 'Remove from samples',
+      unmarkConfirm: 'Remove this case from the sample gallery?',
+      remove: 'Remove',
+      marked: 'Case marked as a sample',
+      unmarked: 'Case removed from the samples',
+      save: 'Save',
+      title: 'Title',
+      description: 'Description',
+      source: 'Source / licence',
+      sourcePlaceholder:
+        'Dataset, licence and citation, e.g. TotalSegmentator dataset (Zenodo 10047263), CC BY 4.0',
+      required: 'Required',
+      tooLong: 'At most {{max}} characters',
+    },
   },
   upload: {
     title: 'Upload',
@@ -112,15 +159,36 @@ export const en: Messages = {
     orCreate: 'or',
     createCase: 'Create a new case',
     selectedCase: 'Selected case',
-    dropTitle: 'Drag a chest X-ray or a CT here, or click to browse',
+    dropTitle: 'Drag an X-ray or a 3D scan here, or click to browse',
     dropHint:
-      'One PNG/JPG X-ray (up to 50 MB) or one CT: NIfTI .nii/.nii.gz or a ZIP of one DICOM series (up to 500 MB)',
-    invalidType: 'Only PNG/JPG images, NIfTI (.nii, .nii.gz) or a ZIP of DICOM files are accepted',
+      'One PNG/JPG or DICOM .dcm X-ray (up to 50 MB), or one 3D scan: NIfTI .nii/.nii.gz, or a ZIP of one DICOM series or of PNG/JPG slices (up to 500 MB)',
+    invalidType:
+      'Only PNG/JPG images, DICOM X-rays (.dcm), NIfTI (.nii, .nii.gz) or a ZIP file are accepted',
     tooLarge: 'The image exceeds 50 MB',
-    tooLargeVolume: 'The CT file exceeds 500 MB',
+    tooLargeVolume: 'The 3D scan exceeds 500 MB',
     kinds: {
       image: '2D image',
+      dicom: 'DICOM X-ray',
       volume: 'CT volume',
+      stack: 'Image stack (3D)',
+    },
+    zip: {
+      label: 'What does the ZIP contain?',
+      dicomSeries: 'One DICOM series (CT/MR)',
+      imageStack: 'PNG/JPG slices, one image per slice (at least 20)',
+      imageStackHint:
+        "Slices are ordered by file name in natural order (img2 before img10); the first file is the most inferior slice (towards the feet), and the left of each image is the patient's right.",
+    },
+    spacing: {
+      legend: 'Voxel spacing (optional)',
+      hint: 'In millimetres, each between {{min}} and {{max}}. Fill in all three or leave all three empty.',
+      x: 'Pixel spacing x (columns)',
+      y: 'Pixel spacing y (rows)',
+      z: 'Slice spacing z',
+      range: 'Enter a value between {{min}} and {{max}} mm',
+      incomplete: 'Fill in all three values or leave them all empty',
+      assumedWarning:
+        'Without a spacing the server assumes 1 mm in every direction: measured distances and volumes will not be accurate.',
     },
     empty: 'The file is empty',
     modality: 'Modality',
@@ -129,13 +197,18 @@ export const en: Messages = {
     removeFile: 'Remove',
     phases: {
       initializing: 'Starting upload session…',
-      uploading: 'Uploading image to storage…',
+      uploading: 'Uploading the file to storage…',
       completing: 'Confirming upload…',
       processing: 'Server is processing the image (format check, normalisation, thumbnail)…',
       processingVolume:
         'Server is processing the CT (unpacking, choosing the series, normalising orientation and HU, thumbnail)…',
+      processingDicom:
+        'Server is decoding the DICOM X-ray (pixel data, rescale, windowing, thumbnail)…',
+      processingStack:
+        'Server is building the volume from the slices (sorting, checking sizes, stacking, thumbnail)…',
       done: 'Image is ready',
       doneVolume: 'CT volume is ready',
+      doneStack: 'Image stack volume is ready',
       failed: 'Upload failed',
     },
     status: {
@@ -151,13 +224,20 @@ export const en: Messages = {
     chooseModel: 'Model',
     another: 'Upload another image',
     tryAgain: 'Try again',
+    cancel: 'Cancel upload',
+    partsProgress: 'Parts uploaded: {{done}} of {{total}}',
     progressLabel: 'Upload progress',
     processingLabel: 'Server processing progress',
     errors: {
       processing: 'The server could not process the file',
       timeout: 'The server is taking too long to process the image. Please upload it again.',
+      timeoutDicom:
+        'The server took more than 5 minutes to process the DICOM image. Please upload it again.',
       timeoutVolume:
         'The server took more than 10 minutes to process the CT. Please upload it again.',
+      partStatus: 'Storage refused part {{part}} of the file (HTTP {{status}}). Please try again.',
+      partNetwork:
+        'Part {{part}} of the file could not be uploaded (no valid answer from storage). Please try again.',
       invalidResponse: 'The server returned no upload URL. Please try again.',
     },
   },
@@ -177,6 +257,8 @@ export const en: Messages = {
     studyNotFound: 'Study not found',
     backToCase: 'Back to case',
     webglRequired: 'This browser cannot display 3D images (WebGL 2 is required).',
+    spacingAssumed: 'Slice spacing assumed to be 1 mm – measurements are not accurate.',
+    spacingAssumedTag: 'assumed',
     tabs: {
       mpr: 'MPR',
       mesh: '3D',
@@ -200,6 +282,8 @@ export const en: Messages = {
       },
       loading: 'Loading CT volume…',
       loadError: 'Could not load the CT volume',
+      loadingVolume: 'Loading volume…',
+      loadErrorVolume: 'Could not load the volume',
       overlayLoading: 'Loading segmentation…',
       overlayError: 'Could not load the segmentation mask',
       labelOrderUnknown:
@@ -245,7 +329,7 @@ export const en: Messages = {
   ai: {
     title: 'AI analysis',
     model: 'Model',
-    noModels: 'No models available for this kind of study',
+    noModels: 'No AI model for this image type',
     threshold: 'Threshold',
     run: 'Run AI',
     runSegmentation: 'Run segmentation',

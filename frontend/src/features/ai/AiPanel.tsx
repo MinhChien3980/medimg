@@ -157,12 +157,14 @@ function RunControls({ studyId, inputType, seriesId, onStarted }: RunControlsPro
     );
   };
 
+  // No model accepts this input type (e.g. an image stack): nothing to run, say so plainly.
+  if (models.data?.length === 0) {
+    return <Alert type="info" showIcon title={t('ai.noModels')} data-testid="no-models" />;
+  }
+
   return (
     <>
       {models.isError && <ProblemAlert error={models.error} />}
-      {models.data && models.data.length === 0 && (
-        <Alert type="warning" showIcon title={t('ai.noModels')} />
-      )}
 
       <label className="field-label" htmlFor="ai-model">
         {t('ai.model')}

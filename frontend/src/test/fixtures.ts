@@ -1,5 +1,6 @@
 import type {
   FindingDto,
+  SampleCaseDto,
   MeshArtifact,
   ModelDto,
   PatientDto,
@@ -15,6 +16,13 @@ export const doctor: UserDto = {
   username: 'doctor',
   fullName: 'Dr. Demo',
   roles: ['DOCTOR'],
+};
+
+export const admin: UserDto = {
+  id: '00000000-0000-4000-8000-000000000002',
+  username: 'admin',
+  fullName: 'Demo Admin',
+  roles: ['ADMIN'],
 };
 
 export const researcher: UserDto = {
@@ -36,6 +44,7 @@ export const patient: PatientDto = {
   note: 'follow-up',
   studyCount: 0,
   createdAt: '2026-11-20T08:00:00Z',
+  sample: null,
 };
 
 export const study: StudyDto = {
@@ -57,6 +66,7 @@ export const study: StudyDto = {
       volumeUrl: null,
       dims: null,
       spacing: null,
+      spacingAssumed: false,
     },
   ],
 };
@@ -135,6 +145,7 @@ export const ctStudy: StudyDto = {
       volumeUrl: '/medimg/studies/ct/series/v/volume.nii.gz?X-Amz-Signature=abc',
       dims: [512, 512, 220],
       spacing: [0.78, 0.78, 1.5],
+      spacingAssumed: false,
     },
   ],
 };
@@ -195,3 +206,92 @@ export const segPrediction = prediction({
     meshes: segMeshes,
   },
 });
+
+// ---------- Slice 2b: DICOM X-ray, image stack, sample cases ----------
+
+/** One DICOM X-ray, normalised by the worker to an 8-bit PNG: viewed like a PNG upload. */
+export const dicomXrayStudy: StudyDto = {
+  ...study,
+  id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  inputType: 'DICOM_2D',
+  modality: 'DX',
+  series: study.series.map((s) => ({
+    ...s,
+    id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    modality: 'DX',
+    rows: 2048,
+    cols: 2500,
+  })),
+};
+
+/** A ZIP of 8-bit PNG slices uploaded without spacing: stored as `OT`, 1 mm assumed. */
+export const stackStudy: StudyDto = {
+  ...ctStudy,
+  id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  inputType: 'IMAGE_STACK',
+  modality: 'OT',
+  bodyPart: 'OTHER',
+  series: [
+    {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      modality: 'OT',
+      rows: 256,
+      cols: 256,
+      numImages: 40,
+      imageUrl: null,
+      thumbnailUrl: '/medimg/studies/st/series/v/thumb.png?X-Amz-Signature=abc',
+      volumeUrl: '/medimg/studies/st/series/v/volume.nii.gz?X-Amz-Signature=abc',
+      dims: [256, 256, 40],
+      spacing: [1, 1, 1],
+      spacingAssumed: true,
+    },
+  ],
+};
+
+export const samplePatient: PatientDto = {
+  ...patient,
+  id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  code: 'CASE-SAMPLE1',
+  note: null,
+  studyCount: 1,
+  sample: {
+    title: 'Abdominal CT, 2 mm',
+    description: 'Portal venous phase, liver and kidneys in view.',
+    source: 'TotalSegmentator dataset (Zenodo 10047263), CC BY 4.0, Wasserthal et al. 2023',
+  },
+};
+
+export const sampleCases: SampleCaseDto[] = [
+  {
+    patientId: samplePatient.id,
+    code: samplePatient.code,
+    title: 'Abdominal CT, 2 mm',
+    description: 'Portal venous phase, liver and kidneys in view.',
+    source: 'TotalSegmentator dataset (Zenodo 10047263), CC BY 4.0, Wasserthal et al. 2023',
+    studies: [
+      {
+        studyId: ctStudy.id,
+        inputType: 'NIFTI',
+        modality: 'CT',
+        thumbnailUrl: '/medimg/studies/ct/series/v/thumb.png?X-Amz-Signature=abc',
+        latestPrediction: { jobId: SEG_JOB_ID, modelCode: 'ct-totalseg', status: 'DONE' },
+      },
+    ],
+  },
+  {
+    patientId: '12121212-1212-4121-8121-121212121212',
+    code: 'CASE-SAMPLE2',
+    title: 'Thorax CT, not segmented yet',
+    description: null,
+    source: 'TotalSegmentator dataset (Zenodo 10047263), CC BY 4.0, Wasserthal et al. 2023',
+    studies: [
+      {
+        studyId: '13131313-1313-4131-8131-131313131313',
+        inputType: 'DICOM_SERIES',
+        modality: 'CT',
+        thumbnailUrl: '/medimg/studies/ct2/series/v/thumb.png?X-Amz-Signature=abc',
+        latestPrediction: null,
+      },
+    ],
+  },
+];

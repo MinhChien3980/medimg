@@ -30,25 +30,38 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { patientsApi, studiesApi } from '@/api/endpoints';
 import { errorMessage } from '@/api/problem';
 import { queryKeys } from '@/api/queryKeys';
-import type { InputType, PatientDto, Uuid } from '@/api/types';
+import { isVolumeInput, type InputType, type PatientDto, type Uuid } from '@/api/types';
 import { useModels, useRunPrediction } from '@/features/ai/hooks';
 import { DEFAULT_THRESHOLD, isSegmentationModel } from '@/features/ai/findings';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { CasePicker } from './CasePicker';
 import {
   ACCEPT_ATTRIBUTE,
+  checkSliceSpacing,
   checkUploadFile,
   formatBytes,
+  isZipFile,
+  type SpacingValues,
   type UploadFileSpec,
   type UploadKind,
+  type ZipContent,
 } from './fileValidation';
-import { useUploadFlow, type UploadFailure, type UploadPhase } from './useUploadFlow';
+import {
+  useUploadFlow,
+  type StartUploadInput,
+  type UploadFailure,
+  type UploadPhase,
+} from './useUploadFlow';
+import { ZipContentFields } from './ZipContentFields';
 
-/** Modality hints per kind of file (the worker reads the real modality from DICOM headers). */
-const MODALITIES: Record<UploadKind, readonly string[]> = {
-  image: ['CR', 'DX'],
-  volume: ['CT', 'MR'],
-};
+/**
+ * Modality hints offered per kind of file. The worker reads the real modality from DICOM headers;
+ * an image stack is always stored as `OT` (other), so that is its only option.
+ */
+function modalityOptions(kind: UploadKind, zip: ZipContent | null): readonly string[] {
+  if (kind === 'volume') return zip === 'imageStack' ? ['OT'] : ['CT', 'MR'];
+  return ['CR', 'DX'];
+}
 const BODY_PARTS = ['CHEST', 'ABDOMEN', 'SKULL', 'EXTREMITY', 'OTHER'];
 
 const PHASE_PERCENT: Record<UploadPhase, number> = {
@@ -61,6 +74,12 @@ const PHASE_PERCENT: Record<UploadPhase, number> = {
   failed: 100,
 };
 
+interface PickedFile {
+  file: File;
+  spec: UploadFileSpec;
+  zip: boolean;
+}
+
 export default function UploadWizardPage() {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -69,9 +88,12 @@ export default function UploadWizardPage() {
 
   const [step, setStep] = useState(0);
   const [picked, setPicked] = useState<PatientDto | null>(null);
-  const [file, setFile] = useState<{ file: File; spec: UploadFileSpec } | null>(null);
+  const [file, setFile] = useState<PickedFile | null>(null);
+  const [zipContent, setZipContent] = useState<ZipContent>('dicomSeries');
   const [modality, setModality] = useState('CR');
   const [bodyPart, setBodyPart] = useState('CHEST');
+  const [request, setRequest] = useState<StartUploadInput | null>(null);
+  const [spacingForm] = Form.useForm<SpacingValues>();
   const flow = useUploadFlow();
 
   // `?caseId=` preselects a case (e.g. coming from the case page).
@@ -82,14 +104,20 @@ export default function UploadWizardPage() {
   });
   const patient = picked ?? preselected.data ?? null;
 
-  const modalities = MODALITIES[file?.spec.kind ?? 'image'];
+  const zip = file?.zip ? zipContent : null;
+  const modalities = modalityOptions(file?.spec.kind ?? 'image', zip);
+
+  const applyModalities = (kind: UploadKind, zipChoice: ZipContent | null) => {
+    const options = modalityOptions(kind, zipChoice);
+    if (!options.includes(modality)) setModality(options[0] ?? modality);
+  };
 
   const beforeUpload = (candidate: File) => {
     const check = checkUploadFile(candidate);
     if (check.ok) {
-      setFile({ file: candidate, spec: check.spec });
-      const options = MODALITIES[check.spec.kind];
-      if (!options.includes(modality)) setModality(options[0] ?? modality);
+      const isZip = isZipFile(candidate.name);
+      setFile({ file: candidate, spec: check.spec, zip: isZip });
+      applyModalities(check.spec.kind, isZip ? zipContent : null);
       if (check.spec.kind === 'volume' && bodyPart === 'CHEST') setBodyPart('ABDOMEN');
     } else if (check.problem === 'type') {
       void message.error(t('upload.invalidType'));
@@ -101,20 +129,49 @@ export default function UploadWizardPage() {
     return Upload.LIST_IGNORE; // never let antd upload by itself
   };
 
-  const startUpload = () => {
-    if (!patient || !file) return;
+  const changeZipContent = (next: ZipContent) => {
+    setZipContent(next);
+    applyModalities('volume', next);
+  };
+
+  const run = (input: StartUploadInput) => {
+    setRequest(input);
     setStep(2);
-    void flow.start({
+    void flow.start(input);
+  };
+
+  const startUpload = async () => {
+    if (!patient || !file) return;
+    let sliceSpacingMm: StartUploadInput['sliceSpacingMm'];
+    if (zip === 'imageStack') {
+      const values = await spacingForm.validateFields().catch(() => null);
+      if (!values) return;
+      const check = checkSliceSpacing([values.x ?? null, values.y ?? null, values.z ?? null]);
+      if (!check.ok) return; // the field validators already show why
+      sliceSpacingMm = check.spacing ?? undefined;
+    }
+    run({
       patientId: patient.id,
       file: file.file,
       modalityHint: modality,
       bodyPartHint: bodyPart,
+      ...(zip ? { zipContent: zip } : {}),
+      ...(sliceSpacingMm ? { sliceSpacingMm } : {}),
     });
+  };
+
+  const retry = () => {
+    if (request) run(request);
   };
 
   const restart = () => {
     flow.reset();
     setFile(null);
+    setStep(1);
+  };
+
+  const cancel = () => {
+    flow.cancel();
     setStep(1);
   };
 
@@ -172,7 +229,9 @@ export default function UploadWizardPage() {
                 {file.spec.kind === 'volume' ? <BlockOutlined /> : <FileImageOutlined />}
                 <span className="picked-file__name">{file.file.name}</span>
                 <Tag color={file.spec.kind === 'volume' ? 'geekblue' : undefined}>
-                  {t(`upload.kinds.${file.spec.kind}`)}
+                  {t(
+                    zip === 'imageStack' ? 'upload.kinds.stack' : `upload.kinds.${file.spec.kind}`,
+                  )}
                 </Tag>
                 <Tag>{formatBytes(file.file.size)}</Tag>
                 <Button
@@ -183,6 +242,10 @@ export default function UploadWizardPage() {
                   onClick={() => setFile(null)}
                 />
               </div>
+            )}
+
+            {file?.zip && (
+              <ZipContentFields value={zipContent} onChange={changeZipContent} form={spacingForm} />
             )}
 
             <Form layout="inline" style={{ marginTop: 16 }}>
@@ -212,7 +275,7 @@ export default function UploadWizardPage() {
                 type="primary"
                 icon={<CloudUploadOutlined />}
                 disabled={!file || !patient}
-                onClick={startUpload}
+                onClick={() => void startUpload()}
               >
                 {t('upload.start')}
               </Button>
@@ -225,7 +288,8 @@ export default function UploadWizardPage() {
             flow={flow}
             patientId={patient?.id ?? null}
             onRestart={restart}
-            onRetry={startUpload}
+            onRetry={retry}
+            onCancel={cancel}
           />
         )}
       </Card>
@@ -233,14 +297,34 @@ export default function UploadWizardPage() {
   );
 }
 
+type Flow = ReturnType<typeof useUploadFlow>;
+
 interface ProcessStepProps {
-  flow: ReturnType<typeof useUploadFlow>;
+  flow: Flow;
   patientId: Uuid | null;
   onRestart: () => void;
   onRetry: () => void;
+  onCancel: () => void;
 }
 
-function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) {
+/** Message key of the processing phase: what the server does depends on what was sent. */
+function processingKey(flow: Flow) {
+  if (flow.kind === 'dicom') return 'processingDicom' as const;
+  if (flow.kind === 'volume') {
+    return flow.zipContent === 'imageStack'
+      ? ('processingStack' as const)
+      : ('processingVolume' as const);
+  }
+  return 'processing' as const;
+}
+
+function doneKey(inputType: InputType | null, kind: UploadKind) {
+  if (inputType === 'IMAGE_STACK') return 'doneStack' as const;
+  if (isVolumeInput(inputType) || (!inputType && kind === 'volume')) return 'doneVolume' as const;
+  return 'done' as const;
+}
+
+function ProcessStep({ flow, patientId, onRestart, onRetry, onCancel }: ProcessStepProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
@@ -248,7 +332,7 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
     return (
       <Result
         status="success"
-        title={t(flow.kind === 'volume' ? 'upload.phases.doneVolume' : 'upload.phases.done')}
+        title={t(`upload.phases.${doneKey(flow.inputType, flow.kind)}`)}
         subTitle={t('upload.doneSubtitle')}
         extra={
           <Space orientation="vertical" align="center" size="middle">
@@ -305,11 +389,8 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
         ? Math.round(flow.processingPercent)
         : PHASE_PERCENT[flow.phase];
   const phaseKey =
-    flow.phase === 'idle'
-      ? 'initializing'
-      : processing && flow.kind === 'volume'
-        ? 'processingVolume'
-        : flow.phase;
+    flow.phase === 'idle' ? 'initializing' : processing ? processingKey(flow) : flow.phase;
+  const cancellable = flow.phase === 'initializing' || flow.phase === 'uploading';
 
   return (
     <div className="process-step" data-testid="process-step">
@@ -322,16 +403,44 @@ function ProcessStep({ flow, patientId, onRestart, onRetry }: ProcessStepProps) 
         status={processing ? 'active' : 'normal'}
         aria-label={t(processing ? 'upload.processingLabel' : 'upload.progressLabel')}
       />
+      {flow.phase === 'uploading' && flow.parts && (
+        <Typography.Text type="secondary" aria-live="polite" data-testid="parts-progress">
+          {t('upload.partsProgress', { done: flow.parts.done, total: flow.parts.total })}
+        </Typography.Text>
+      )}
       {flow.uploadStatus && <Tag>{t(`upload.status.${flow.uploadStatus}`)}</Tag>}
+      {cancellable && (
+        <div className="process-step__actions">
+          <Button onClick={onCancel}>{t('upload.cancel')}</Button>
+        </div>
+      )}
     </div>
   );
 }
+
+const TIMEOUT_KEYS = {
+  image: 'upload.errors.timeout',
+  dicom: 'upload.errors.timeoutDicom',
+  volume: 'upload.errors.timeoutVolume',
+} as const satisfies Record<UploadKind, string>;
 
 function FailureAlert({ failure, kind }: { failure: UploadFailure; kind: UploadKind }) {
   const { t } = useTranslation();
   switch (failure.kind) {
     case 'request':
       return <ProblemAlert error={failure.error} />;
+    case 'part':
+      return (
+        <Alert
+          type="error"
+          showIcon
+          title={
+            failure.status === null
+              ? t('upload.errors.partNetwork', { part: failure.partNumber })
+              : t('upload.errors.partStatus', { part: failure.partNumber, status: failure.status })
+          }
+        />
+      );
     case 'processing':
       return (
         <Alert
@@ -342,13 +451,7 @@ function FailureAlert({ failure, kind }: { failure: UploadFailure; kind: UploadK
         />
       );
     case 'timeout':
-      return (
-        <Alert
-          type="error"
-          showIcon
-          title={t(kind === 'volume' ? 'upload.errors.timeoutVolume' : 'upload.errors.timeout')}
-        />
-      );
+      return <Alert type="error" showIcon title={t(TIMEOUT_KEYS[kind])} />;
     case 'invalidResponse':
       return <Alert type="error" showIcon title={t('upload.errors.invalidResponse')} />;
   }
@@ -365,6 +468,10 @@ function RunAiButton({ studyId, inputType }: { studyId: Uuid; inputType: InputTy
   const [busy, setBusy] = useState(false);
   const effectiveModel = modelCode ?? models.data?.[0]?.code ?? null;
   const selected = models.data?.find((m) => m.code === effectiveModel);
+
+  if (models.data?.length === 0) {
+    return <Typography.Text type="secondary">{t('ai.noModels')}</Typography.Text>;
+  }
 
   const onRun = async () => {
     if (!effectiveModel) return;

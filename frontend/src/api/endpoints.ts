@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { authHttp, http } from './http';
 import type {
+  CompleteUploadRequest,
   CreatePatientRequest,
   CreatePredictionRequest,
   CreatePredictionResponse,
@@ -8,11 +9,13 @@ import type {
   InitUploadResponse,
   InputType,
   LoginRequest,
+  MarkSampleRequest,
   ModelDto,
   Page,
   PatientDto,
   PatientQuery,
   PredictionDto,
+  SampleCaseDto,
   StudyDto,
   TokenResponse,
   UpdatePatientRequest,
@@ -48,6 +51,17 @@ export const patientsApi = {
     http.put<PatientDto>(`/patients/${id}`, body).then((r) => r.data),
   remove: (id: Uuid) => http.delete<void>(`/patients/${id}`).then(() => undefined),
   studies: (id: Uuid) => http.get<StudyDto[]>(`/patients/${id}/studies`).then((r) => r.data),
+  /** ADMIN: marks the case as a sample case, or updates its sample presentation. */
+  markSample: (id: Uuid, body: MarkSampleRequest) =>
+    http.put<PatientDto>(`/patients/${id}/sample`, body).then((r) => r.data),
+  /** ADMIN: the case is no longer a sample case. */
+  unmarkSample: (id: Uuid) => http.delete<void>(`/patients/${id}/sample`).then(() => undefined),
+};
+
+// ---------- Sample cases ----------
+
+export const samplesApi = {
+  list: () => http.get<SampleCaseDto[]>('/samples').then((r) => r.data),
 };
 
 // ---------- Uploads ----------
@@ -55,8 +69,9 @@ export const patientsApi = {
 export const uploadsApi = {
   init: (body: InitUploadRequest) =>
     http.post<InitUploadResponse>('/uploads/init', body).then((r) => r.data),
-  complete: (uploadId: Uuid) =>
-    http.post<UploadDto>(`/uploads/${uploadId}/complete`).then((r) => r.data),
+  /** `body` lists the parts of multipart files; a single-PUT upload is completed without a body. */
+  complete: (uploadId: Uuid, body?: CompleteUploadRequest) =>
+    http.post<UploadDto>(`/uploads/${uploadId}/complete`, body).then((r) => r.data),
   get: (uploadId: Uuid) => http.get<UploadDto>(`/uploads/${uploadId}`).then((r) => r.data),
 };
 

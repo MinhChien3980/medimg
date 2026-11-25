@@ -3,7 +3,8 @@ import type { Role, UserDto } from '@/api/types';
 import { doctor } from '@/test/fixtures';
 import { can, type Permission } from './permissions';
 
-const ALL: Permission[] = ['createCase', 'upload', 'runAi', 'manageJob'];
+const WRITE: Permission[] = ['createCase', 'upload', 'runAi', 'manageJob'];
+const ALL: Permission[] = [...WRITE, 'manageSamples'];
 
 function withRoles(...roles: Role[]): UserDto {
   return { ...doctor, roles };
@@ -11,7 +12,14 @@ function withRoles(...roles: Role[]): UserDto {
 
 describe('can', () => {
   it.each<Role>(['ADMIN', 'DOCTOR', 'TECHNICIAN'])('%s may perform every write action', (role) => {
-    for (const permission of ALL) expect(can(withRoles(role), permission)).toBe(true);
+    for (const permission of WRITE) expect(can(withRoles(role), permission)).toBe(true);
+  });
+
+  it('only ADMIN manages sample cases', () => {
+    expect(can(withRoles('ADMIN'), 'manageSamples')).toBe(true);
+    for (const role of ['DOCTOR', 'TECHNICIAN', 'RESEARCHER'] as const) {
+      expect(can(withRoles(role), 'manageSamples')).toBe(false);
+    }
   });
 
   it('RESEARCHER is read-only', () => {
