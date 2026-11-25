@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: ["**"]
 
 permissions:
   contents: read
@@ -13,22 +13,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Pull requests run only the jobs whose area changed; pushes to main run everything.
+  # Pushes to main and dev run every job, including the real-model tests. Pull requests and
+  # pushes to other branches run only the jobs whose area changed (compared with dev).
   changes:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      backend: ${{ github.event_name == 'push' || steps.filter.outputs.backend == 'true' }}
-      ai-worker: ${{ github.event_name == 'push' || steps.filter.outputs.ai-worker == 'true' }}
-      frontend: ${{ github.event_name == 'push' || steps.filter.outputs.frontend == 'true' }}
-      tools: ${{ github.event_name == 'push' || steps.filter.outputs.tools == 'true' }}
+      full: ${{ steps.scope.outputs.full }}
+      backend: ${{ steps.scope.outputs.full == 'true' || steps.filter.outputs.backend == 'true' }}
+      ai-worker: ${{ steps.scope.outputs.full == 'true' || steps.filter.outputs.ai-worker == 'true' }}
+      frontend: ${{ steps.scope.outputs.full == 'true' || steps.filter.outputs.frontend == 'true' }}
+      tools: ${{ steps.scope.outputs.full == 'true' || steps.filter.outputs.tools == 'true' }}
     steps:
+      - id: scope
+        run: echo "full=${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') }}" >> "$GITHUB_OUTPUT"
+      # On a push, paths-filter diffs against dev with git, so it needs the history.
+      - uses: actions/checkout@v7
+        if: steps.scope.outputs.full != 'true' && github.event_name == 'push'
+        with:
+          fetch-depth: 0
       - uses: dorny/paths-filter@v4
         id: filter
-        if: github.event_name == 'pull_request'
+        if: steps.scope.outputs.full != 'true'
         with:
+          base: dev
           filters: |
             backend:
               - backend/core-service/**
@@ -90,10 +100,10 @@ jobs:
           cache-from: type=gha,scope=ai-worker
           cache-to: type=gha,scope=ai-worker,mode=max
       - name: Lint and fast tests
-        if: github.event_name == 'pull_request'
+        if: needs.changes.outputs.full != 'true'
         run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && ruff format --check . && python -m pytest -q -m 'not slow'"
       - name: Lint and all tests, including the real models
-        if: github.event_name == 'push'
+        if: needs.changes.outputs.full == 'true'
         run: docker run --rm medimg-ai-worker:test sh -c "ruff check . && ruff format --check . && python -m pytest -q"
 
   tools:
