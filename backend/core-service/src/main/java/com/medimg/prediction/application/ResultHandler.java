@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.medimg.imaging.application.StudyService;
 import com.medimg.prediction.application.PredictionDtos.PredictionChanged;
+import com.medimg.prediction.application.WorkerResult.Artifacts;
 import com.medimg.prediction.application.WorkerResult.Payload;
 import com.medimg.prediction.application.WorkerResult.PayloadFinding;
 import com.medimg.prediction.domain.Finding;
@@ -102,8 +103,10 @@ public class ResultHandler {
 
     private void complete(PredictionJob job, WorkerResult r, Instant now) {
         Payload payload;
+        StoredArtifacts artifacts;
         try {
             payload = json.readValue(r.payloadJson(), Payload.class);
+            artifacts = storedArtifacts(payload.artifacts());
         } catch (RuntimeException e) {
             log.error("Job {}: unreadable DONE payload", job.getId(), e);
             fail(job, "Worker returned an unreadable result", false, now);
@@ -114,19 +117,36 @@ public class ResultHandler {
             results.delete(old);
             results.flush();
         });
-        Map<String, String> heatmapKeys = new LinkedHashMap<>();
-        if (payload.artifacts() != null && payload.artifacts().heatmaps() != null) {
-            payload.artifacts().heatmaps().forEach((label, uri) -> heatmapKeys.put(label, storage.keyOf(uri)));
-        }
         PredictionResult result = results.save(new PredictionResult(job.getId(), r.payloadJson(),
-                json.writeValueAsString(heatmapKeys), payload.inferenceMs()));
+                json.writeValueAsString(artifacts.heatmapKeys()), artifacts.segmentationKey(),
+                artifacts.meshes() == null ? null : json.writeValueAsString(artifacts.meshes()), payload.inferenceMs()));
         List<PayloadFinding> list = payload.findings() == null ? List.of() : payload.findings();
         findings.saveAll(list.stream()
-                .map(f -> new Finding(result.getId(), f.label(), f.confidence(),
+                .map(f -> new Finding(result.getId(), f.label(), f.confidence(), f.volumeMl(),
                         f.bbox() == null ? null : json.writeValueAsString(f.bbox())))
                 .toList());
         job.complete(now);
         log.info("Job {} done: {} findings, {} ms", job.getId(), list.size(), payload.inferenceMs());
+    }
+
+    private record StoredArtifacts(Map<String, String> heatmapKeys, String segmentationKey, List<MeshArtifact> meshes) {
+    }
+
+    /** Worker URIs become bucket-relative keys; a URI outside the bucket makes the payload unreadable. */
+    private StoredArtifacts storedArtifacts(Artifacts artifacts) {
+        Map<String, String> heatmapKeys = new LinkedHashMap<>();
+        if (artifacts == null) {
+            return new StoredArtifacts(heatmapKeys, null, null);
+        }
+        if (artifacts.heatmaps() != null) {
+            artifacts.heatmaps().forEach((label, uri) -> heatmapKeys.put(label, storage.keyOf(uri)));
+        }
+        String segmentationKey = artifacts.segmentation() == null ? null : storage.keyOf(artifacts.segmentation());
+        List<MeshArtifact> meshes = artifacts.meshes() == null ? null : artifacts.meshes().stream()
+                .map(m -> new MeshArtifact(m.label(), m.color(), storage.keyOf(m.uri()), m.triangles(), m.volumeMl(),
+                        m.centroid()))
+                .toList();
+        return new StoredArtifacts(heatmapKeys, segmentationKey, meshes);
     }
 
     /**

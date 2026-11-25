@@ -12,7 +12,12 @@ import com.medimg.prediction.domain.Finding;
 
 public interface FindingRepository extends JpaRepository<Finding, UUID> {
 
-    List<Finding> findByResultIdInOrderByConfidenceDesc(Collection<UUID> resultIds);
+    /** Most confident first; segmentation findings (no confidence) largest first. */
+    @Query("""
+            select f from Finding f where f.resultId in :resultIds
+            order by f.confidence desc nulls last, f.volumeMl desc nulls last, f.label
+            """)
+    List<Finding> findByResultIds(Collection<UUID> resultIds);
 
     @Modifying
     @Query("delete from Finding f where f.resultId = :resultId")

@@ -1,6 +1,7 @@
 package com.medimg.imaging.domain;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -11,7 +12,10 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** Storage keys are bucket-relative ({@code studies/{studyId}/series/{seriesId}/...}). */
+/**
+ * Storage keys are bucket-relative ({@code studies/{studyId}/series/{seriesId}/...}). A volume's dimensions are
+ * {@code cols} (x), {@code rows} (y) and {@code numImages} (z), in the voxel order of its NIfTI file.
+ */
 @Entity
 @Table(name = "series")
 @Getter
@@ -42,6 +46,16 @@ public class Series {
     @Column(name = "thumbnail_uri")
     private String thumbnailKey;
 
+    /** Voxel spacing in mm, volumes only. */
+    @Column(name = "spacing_x")
+    private Double spacingX;
+
+    @Column(name = "spacing_y")
+    private Double spacingY;
+
+    @Column(name = "spacing_z")
+    private Double spacingZ;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -56,5 +70,24 @@ public class Series {
         this.imageKey = imageKey;
         this.thumbnailKey = thumbnailKey;
         this.createdAt = now;
+    }
+
+    /** {@code dims} and {@code spacing} are {@code [x, y, z]}. */
+    public static Series volume(UUID id, UUID studyId, String modality, List<Integer> dims, List<Double> spacing,
+                                String volumeKey, String thumbnailKey, Instant now) {
+        Series s = new Series(id, studyId, modality, dims.get(2), dims.get(1), dims.get(0), volumeKey, thumbnailKey, now);
+        s.spacingX = spacing.get(0);
+        s.spacingY = spacing.get(1);
+        s.spacingZ = spacing.get(2);
+        return s;
+    }
+
+    public List<Integer> dims() {
+        return List.of(cols, rows, numImages);
+    }
+
+    /** Null for 2D images. */
+    public List<Double> spacing() {
+        return spacingX == null ? null : List.of(spacingX, spacingY, spacingZ);
     }
 }

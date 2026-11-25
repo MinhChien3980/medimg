@@ -24,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -45,6 +46,7 @@ import com.medimg.prediction.infrastructure.FindingRepository;
 import com.medimg.prediction.infrastructure.PredictionJobRepository;
 import com.medimg.prediction.infrastructure.PredictionResultRepository;
 import com.medimg.shared.storage.ObjectStoragePort;
+import com.medimg.shared.web.ApiException;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -74,9 +76,10 @@ class PredictionServiceTest {
         AiModel model = mock(AiModel.class);
         when(model.getId()).thenReturn(UUID.randomUUID());
         when(model.accepts("IMAGE_2D")).thenReturn(true);
+        when(model.supportsModality("CR")).thenReturn(true);
         when(models.findFirstByCodeAndStatusOrderByCreatedAtDesc("cxr", AiModel.Status.ACTIVE)).thenReturn(Optional.of(model));
         when(studies.requireSeries(studyId, seriesId))
-                .thenReturn(new SeriesRef(studyId, seriesId, UUID.randomUUID(), "IMAGE_2D", "CR", "CHEST", "s3://b/k"));
+                .thenReturn(new SeriesRef(studyId, seriesId, UUID.randomUUID(), "IMAGE_2D", "CR", "CHEST", "IMAGE_2D", "s3://b/k"));
         when(jobs.saveAndFlush(any(PredictionJob.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint"));
     }
@@ -120,6 +123,26 @@ class PredictionServiceTest {
         order.verify(jobs).saveAndFlush(any(PredictionJob.class));
         order.verify(outbox).dispatch(any(PredictionJob.class), eq(NOW));
         assertThat(created.status()).isEqualTo("QUEUED");
+    }
+
+    @Test
+    void modelForAnotherInputTypeOrModalityIsRejected() {
+        AiModel ct = mock(AiModel.class);
+        when(ct.getCode()).thenReturn("ct-totalseg");
+        when(ct.getModality()).thenReturn("CT");
+        when(ct.accepts("IMAGE_2D")).thenReturn(true);
+        when(models.findFirstByCodeAndStatusOrderByCreatedAtDesc("ct", AiModel.Status.ACTIVE)).thenReturn(Optional.of(ct));
+
+        assertThatThrownBy(() -> service.create(new CreatePrediction(studyId, seriesId, "ct", Map.of(), null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+                    assertThat(e.getMessage()).isEqualTo("Model ct-totalseg is for CT images, the series is CR");
+                });
+
+        when(ct.accepts("IMAGE_2D")).thenReturn(false);
+        assertThatThrownBy(() -> service.create(new CreatePrediction(studyId, seriesId, "ct", Map.of(), null)))
+                .hasMessage("Model ct-totalseg does not accept IMAGE_2D input");
+        verify(outbox, never()).dispatch(any(), any());
     }
 
     @Test

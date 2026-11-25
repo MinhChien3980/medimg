@@ -61,7 +61,7 @@ public class StudyService {
                 .filter(x -> x.getStudyId().equals(studyId))
                 .orElseThrow(() -> ApiException.notFound("Series", seriesId));
         return new SeriesRef(study.getId(), s.getId(), study.getPatientId(), study.getInputType().name(),
-                s.getModality(), study.getBodyPart(), storage.uri(s.getImageKey()));
+                s.getModality(), study.getBodyPart(), study.getInputType().normalized().name(), storage.uri(s.getImageKey()));
     }
 
     @Transactional(readOnly = true)
@@ -86,12 +86,14 @@ public class StudyService {
     private StudyDto toDto(Study study, List<Series> seriesList) {
         return new StudyDto(study.getId(), study.getPatientId(), study.getInputType().name(), study.getModality(),
                 study.getBodyPart(), study.getCreatedAt(),
-                seriesList.stream().map(this::toDto).toList());
+                seriesList.stream().map(s -> toDto(s, study.getInputType().isVolume())).toList());
     }
 
-    private SeriesDto toDto(Series s) {
+    private SeriesDto toDto(Series s, boolean volume) {
+        URI stored = url(s.getImageKey());
         return new SeriesDto(s.getId(), s.getModality(), s.getRows(), s.getCols(), s.getNumImages(),
-                url(s.getImageKey()), url(s.getThumbnailKey()));
+                volume ? null : stored, url(s.getThumbnailKey()), volume ? stored : null,
+                volume ? s.dims() : null, volume ? s.spacing() : null);
     }
 
     private URI url(String key) {

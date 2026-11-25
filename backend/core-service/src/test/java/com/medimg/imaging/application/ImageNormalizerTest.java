@@ -21,26 +21,11 @@ import javax.imageio.metadata.IIOMetadataNode;
 
 import org.junit.jupiter.api.Test;
 
-import com.medimg.imaging.application.ImageNormalizer.FileType;
+import com.medimg.imaging.application.FileTypeDetector.FileType;
 import com.medimg.imaging.application.ImageNormalizer.InvalidImageException;
 import com.medimg.imaging.application.ImageNormalizer.Normalized;
 
 class ImageNormalizerTest {
-
-    @Test
-    void detectsTypesByMagicBytes() {
-        assertThat(ImageNormalizer.detect(new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A})).isEqualTo(FileType.PNG);
-        assertThat(ImageNormalizer.detect(new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0x00})).isEqualTo(FileType.JPEG);
-        byte[] dicom = new byte[200];
-        dicom[128] = 'D';
-        dicom[129] = 'I';
-        dicom[130] = 'C';
-        dicom[131] = 'M';
-        assertThat(ImageNormalizer.detect(dicom)).isEqualTo(FileType.DICOM);
-        assertThat(ImageNormalizer.detect(new byte[] {'P', 'K', 3, 4})).isEqualTo(FileType.ZIP);
-        assertThat(ImageNormalizer.detect(new byte[] {0x5C, 0x01, 0, 0})).isEqualTo(FileType.NIFTI); // 348 LE
-        assertThat(ImageNormalizer.detect("hello world".getBytes(StandardCharsets.UTF_8))).isEqualTo(FileType.UNKNOWN);
-    }
 
     @Test
     void normalisesPngToGrayscaleWithoutMetadataAndMakesThumbnail() throws IOException {
@@ -85,7 +70,7 @@ class ImageNormalizerTest {
         byte[] dicom = new byte[300];
         System.arraycopy("DICM".getBytes(StandardCharsets.US_ASCII), 0, dicom, 128, 4);
         assertThatThrownBy(() -> ImageNormalizer.normalize2d(dicom, 256))
-                .isInstanceOf(InvalidImageException.class).hasMessageContaining("not supported yet");
+                .isInstanceOf(InvalidImageException.class).hasMessageContaining("not supported as 2D images");
 
         byte[] truncated = Arrays.copyOf(small.toByteArray(), 40);
         assertThatThrownBy(() -> ImageNormalizer.normalize2d(truncated, 256)).isInstanceOf(InvalidImageException.class);

@@ -24,7 +24,7 @@ import com.medimg.imaging.infrastructure.StudyRepository;
 import com.medimg.imaging.infrastructure.UploadSessionRepository;
 import com.medimg.shared.storage.ObjectStoragePort;
 
-/** Background processing of a completed upload: validate → de-identify → normalise → Study/Series. */
+/** Background processing of a completed 2D image upload: validate → de-identify → normalise → Study/Series. */
 @Component
 class UploadProcessor {
 
@@ -35,18 +35,20 @@ class UploadProcessor {
     private final SeriesRepository series;
     private final ImageFileRepository imageFiles;
     private final ObjectStoragePort storage;
+    private final RawUploads rawUploads;
     private final ImagingProperties props;
     private final TransactionTemplate tx;
     private final Clock clock;
 
     UploadProcessor(UploadSessionRepository uploads, StudyRepository studies, SeriesRepository series,
-                    ImageFileRepository imageFiles, ObjectStoragePort storage, ImagingProperties props,
-                    TransactionTemplate tx, Clock clock) {
+                    ImageFileRepository imageFiles, ObjectStoragePort storage, RawUploads rawUploads,
+                    ImagingProperties props, TransactionTemplate tx, Clock clock) {
         this.uploads = uploads;
         this.studies = studies;
         this.series = series;
         this.imageFiles = imageFiles;
         this.storage = storage;
+        this.rawUploads = rawUploads;
         this.props = props;
         this.tx = tx;
         this.clock = clock;
@@ -89,11 +91,11 @@ class UploadProcessor {
                         img.sha256Original(), prefix + "image.png", 1));
                 uploads.findById(uploadId).orElseThrow().markDone(study.getId(), clock.instant());
             });
-            deleteQuietly(file.getStorageKey()); // the raw upload may still carry identifying metadata
+            rawUploads.delete(file.getStorageKey());
             log.info("Upload {} processed into study {} ({}x{})", uploadId, study.getId(), img.width(), img.height());
         } catch (InvalidImageException e) {
             fail(uploadId, e.getMessage());
-            deleteQuietly(file.getStorageKey());
+            rawUploads.delete(file.getStorageKey());
         } catch (Throwable t) {
             log.error("Processing upload {} failed", uploadId, t);
             fail(uploadId, "Processing failed, please try again");
@@ -109,14 +111,6 @@ class UploadProcessor {
             tx.executeWithoutResult(s -> uploads.findById(uploadId).orElseThrow().markFailed(message, clock.instant()));
         } catch (RuntimeException e) {
             log.error("Could not mark upload {} as failed", uploadId, e);
-        }
-    }
-
-    private void deleteQuietly(String key) {
-        try {
-            storage.delete(key);
-        } catch (RuntimeException e) {
-            log.warn("Could not delete raw upload {}: {}", key, e.getMessage());
         }
     }
 }

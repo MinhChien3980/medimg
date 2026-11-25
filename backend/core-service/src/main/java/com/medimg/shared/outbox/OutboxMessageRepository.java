@@ -1,4 +1,4 @@
-package com.medimg.prediction.infrastructure;
+package com.medimg.shared.outbox;
 
 import java.time.Instant;
 import java.util.List;
@@ -8,7 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
-public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Long> {
+interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Long> {
 
     /**
      * Locks up to {@code limit} due, unpublished messages, oldest first. Rows locked by another relay are skipped, so
@@ -24,8 +24,8 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
     List<OutboxMessage> lockDue(Instant now, int limit);
 
     @Modifying
-    @Query("delete from OutboxMessage m where m.jobId = :jobId and m.publishedAt is null")
-    int deletePendingByJobId(UUID jobId);
+    @Query("delete from OutboxMessage m where m.type = :type and m.aggregateId = :aggregateId and m.publishedAt is null")
+    int deletePending(String type, UUID aggregateId);
 
     @Modifying
     @Query("delete from OutboxMessage m where m.publishedAt < :before")

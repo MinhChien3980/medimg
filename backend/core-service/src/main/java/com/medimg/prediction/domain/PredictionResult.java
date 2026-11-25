@@ -34,14 +34,26 @@ public class PredictionResult {
     @ColumnTransformer(write = "?::jsonb")
     private String heatmaps;
 
+    /** Bucket-relative key of the labelmap of a 3D segmentation, or null. */
+    @Column(name = "segmentation_key")
+    private String segmentationKey;
+
+    /** JSON array of the meshes of a 3D segmentation (label, color, key, triangles, volumeMl, centroid), or null. */
+    @Column(columnDefinition = "jsonb")
+    @ColumnTransformer(write = "?::jsonb")
+    private String meshes;
+
     @Column(name = "inference_ms")
     private Integer inferenceMs;
 
-    public PredictionResult(UUID jobId, String summary, String heatmaps, Integer inferenceMs) {
+    public PredictionResult(UUID jobId, String summary, String heatmaps, String segmentationKey, String meshes,
+                            Integer inferenceMs) {
         this.id = UUID.randomUUID();
         this.jobId = jobId;
         this.summary = summary;
         this.heatmaps = heatmaps;
+        this.segmentationKey = segmentationKey;
+        this.meshes = meshes;
         this.inferenceMs = inferenceMs;
     }
 }

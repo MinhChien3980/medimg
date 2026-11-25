@@ -18,6 +18,9 @@ public interface ObjectStoragePort {
 
     byte[] get(String key);
 
+    /** The first {@code maxBytes} bytes of the object (all of it if it is smaller), read with a ranged GET. */
+    byte[] getFirstBytes(String key, int maxBytes);
+
     void put(String key, byte[] content, String contentType);
 
     long size(String key);

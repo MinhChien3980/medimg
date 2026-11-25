@@ -1,4 +1,4 @@
-package com.medimg.prediction.infrastructure;
+package com.medimg.shared.outbox;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -15,15 +15,12 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/** A job dispatch stored with the job state change and published to Redis by {@link JobOutboxRelay}. */
+/** A stream entry stored with the state change that caused it and published to Redis by {@link OutboxRelay}. */
 @Entity
 @Table(name = "outbox_message")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-public class OutboxMessage {
-
-    /** The only message type: one attempt of an AI job, published to {@code ai.jobs.gpu} or {@code ai.jobs.cpu}. */
-    public static final String JOB_DISPATCH = "JOB_DISPATCH";
+class OutboxMessage {
 
     private static final int MAX_ERROR_LENGTH = 1000;
 
@@ -31,12 +28,14 @@ public class OutboxMessage {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "job_id", nullable = false)
-    private UUID jobId;
+    /** The job, upload, ... the message belongs to; at most one message per type and aggregate is pending. */
+    @Column(name = "aggregate_id", nullable = false)
+    private UUID aggregateId;
 
     @Column(nullable = false)
     private String type;
 
+    /** JSON object: the fields of the stream entry. */
     @Column(columnDefinition = "jsonb", nullable = false)
     @ColumnTransformer(write = "?::jsonb")
     private String payload;
@@ -58,14 +57,12 @@ public class OutboxMessage {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    public static OutboxMessage jobDispatch(UUID jobId, String payloadJson, Instant availableAt, Instant now) {
-        OutboxMessage m = new OutboxMessage();
-        m.jobId = jobId;
-        m.type = JOB_DISPATCH;
-        m.payload = payloadJson;
-        m.availableAt = availableAt;
-        m.createdAt = now;
-        return m;
+    OutboxMessage(String type, UUID aggregateId, String payloadJson, Instant availableAt, Instant now) {
+        this.type = type;
+        this.aggregateId = aggregateId;
+        this.payload = payloadJson;
+        this.availableAt = availableAt;
+        this.createdAt = now;
     }
 
     void markPublished(String streamName, Instant now) {

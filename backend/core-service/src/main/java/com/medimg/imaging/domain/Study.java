@@ -20,7 +20,18 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Study {
 
-    public enum InputType { IMAGE_2D, DICOM_2D, DICOM_SERIES, NIFTI, IMAGE_STACK }
+    public enum InputType {
+        IMAGE_2D, DICOM_2D, DICOM_SERIES, NIFTI, IMAGE_STACK;
+
+        public boolean isVolume() {
+            return this == DICOM_SERIES || this == NIFTI || this == IMAGE_STACK;
+        }
+
+        /** Format of the stored, normalised series: a PNG for 2D input, a NIfTI volume for any volume input. */
+        public InputType normalized() {
+            return isVolume() ? NIFTI : IMAGE_2D;
+        }
+    }
 
     @Id
     private UUID id;
@@ -47,7 +58,13 @@ public class Study {
     private Instant createdAt;
 
     public Study(UUID patientId, InputType inputType, String modality, String bodyPart, UUID createdBy, Instant now) {
-        this.id = UUID.randomUUID();
+        this(UUID.randomUUID(), patientId, inputType, modality, bodyPart, createdBy, now);
+    }
+
+    /** With an id reserved before the images were stored under {@code studies/{id}/}. */
+    public Study(UUID id, UUID patientId, InputType inputType, String modality, String bodyPart, UUID createdBy,
+                 Instant now) {
+        this.id = id;
         this.patientId = patientId;
         this.inputType = inputType;
         this.modality = modality;

@@ -88,9 +88,22 @@ app:
     secret-key: ${S3_SECRET_KEY:medimg-dev-secret}
     presign-ttl: 15m
   imaging:
+    # 2D images (PNG, JPEG), processed in core-service
     max-upload-bytes: 52428800
     min-image-dimension: 256
     processing-timeout: 10m
+    # Volumes (ZIP of DICOM files, NIfTI), handed to the ingest worker through the outbox (imaging.jobs)
+    volume:
+      max-upload-bytes: 524288000
+      # no news from the ingest worker for this long → the upload fails
+      processing-timeout: 30m
+      max-attempts: 3
+      retry-backoff: 30s,2m
+    result-stream:
+      consumer-name: ${HOSTNAME:core-1}
+      max-deliveries: 5
+      reclaim-idle: 30s
+      reclaim-interval: 15s
   ai:
     max-attempts: 3
     retry-backoff: 30s,2m
@@ -99,18 +112,19 @@ app:
     queued-timeout: 30m
     sse-heartbeat: 15s
     sse-timeout: 30m
-    # Job dispatches are written to the outbox_message table with the job and relayed to the Redis job streams.
-    outbox:
-      poll-interval: 1s
-      batch-size: 50
-      publish-backoff: 5s
-      max-publish-backoff: 5m
-      retention: 7d
     result-stream:
       consumer-name: ${HOSTNAME:core-1}
       max-deliveries: 5
       reclaim-idle: 30s
       reclaim-interval: 15s
+  # Job and ingest dispatches are written to the outbox_message table with the state change that causes them and
+  # relayed to the Redis streams.
+  outbox:
+    poll-interval: 1s
+    batch-size: 50
+    publish-backoff: 5s
+    max-publish-backoff: 5m
+    retention: 7d
 
 logging:
   level:

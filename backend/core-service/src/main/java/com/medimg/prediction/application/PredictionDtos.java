@@ -18,10 +18,17 @@ public final class PredictionDtos {
     public record ModelRef(String code, String version) {
     }
 
-    public record FindingDto(UUID id, String label, BigDecimal confidence, List<Double> bbox, String reviewStatus) {
+    /** {@code confidence} is null for segmentation findings, {@code volumeMl} (segmented volume) for 2D ones. */
+    public record FindingDto(UUID id, String label, BigDecimal confidence, BigDecimal volumeMl, List<Double> bbox,
+                             String reviewStatus) {
     }
 
-    public record ArtifactsDto(Map<String, URI> heatmaps) {
+    /** One organ surface as GLB; {@code centroid} in patient LPS coordinates (mm). */
+    public record MeshDto(String label, String color, URI url, Integer triangles, Double volumeMl, List<Double> centroid) {
+    }
+
+    /** {@code segmentation} (labelmap NIfTI) and {@code meshes} come from 3D segmentation; null and empty otherwise. */
+    public record ArtifactsDto(Map<String, URI> heatmaps, URI segmentation, List<MeshDto> meshes) {
     }
 
     /** {@code params} holds the job parameters as given at creation (e.g. {@code threshold}); empty when none. */

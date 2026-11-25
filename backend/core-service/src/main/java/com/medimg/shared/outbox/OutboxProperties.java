@@ -1,4 +1,4 @@
-package com.medimg.prediction.infrastructure;
+package com.medimg.shared.outbox;
 
 import java.time.Duration;
 
@@ -11,7 +11,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param maxPublishBackoff upper bound of that delay
  * @param retention         how long published messages are kept
  */
-@ConfigurationProperties("app.ai.outbox")
+@ConfigurationProperties("app.outbox")
 public record OutboxProperties(Duration pollInterval, int batchSize, Duration publishBackoff, Duration maxPublishBackoff,
                                Duration retention) {
 

@@ -15,10 +15,22 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+/**
+ * An upload and its processing.
+ * <pre>
+ * INIT ─(complete, 2D image)─► UPLOADED ─► PROCESSING (in process) ─► DONE | FAILED
+ * INIT ─(complete, volume)───► UPLOADED ─(worker STARTED/PROGRESS)─► PROCESSING ─(DONE)─► DONE
+ *                                 ▲                                      │
+ *                                 └──(FAILED retryable, attempt &lt; max)──┘ (attempt+1)    otherwise ─► FAILED
+ * </pre>
+ * A volume is processed by the ingest worker. Its messages carry the attempt number; messages of another attempt, and
+ * any message once the upload is DONE or FAILED, are ignored.
+ */
 @Entity
 @Table(name = "upload_session")
 @Getter
@@ -26,6 +38,8 @@ import lombok.NoArgsConstructor;
 public class UploadSession {
 
     public enum Status { INIT, UPLOADED, PROCESSING, DONE, FAILED }
+
+    public enum FailureOutcome { RETRY_SCHEDULED, FAILED }
 
     @Id
     private UUID id;
@@ -49,6 +63,23 @@ public class UploadSession {
     @Column(name = "total_bytes", nullable = false)
     private long totalBytes;
 
+    /** Detected from the file content when the upload is completed. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "input_type")
+    private Study.InputType inputType;
+
+    @Column(nullable = false)
+    private short progress;
+
+    @Column(nullable = false)
+    private short attempt;
+
+    @Column(name = "reserved_study_id")
+    private UUID reservedStudyId;
+
+    @Column(name = "reserved_series_id")
+    private UUID reservedSeriesId;
+
     @Column(name = "study_id")
     private UUID studyId;
 
@@ -63,6 +94,9 @@ public class UploadSession {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    @Version
+    private long version;
+
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     @JoinColumn(name = "upload_id", nullable = false, updatable = false)
     private List<UploadFile> files = new ArrayList<>();
@@ -74,6 +108,7 @@ public class UploadSession {
         this.bodyPartHint = bodyPartHint;
         this.createdBy = createdBy;
         this.status = Status.INIT;
+        this.attempt = 1;
         this.createdAt = now;
     }
 
@@ -87,9 +122,41 @@ public class UploadSession {
         return f;
     }
 
+    /** A 2D image, processed in process. */
     public void markUploaded(Instant now) {
         requireStatus(Status.INIT);
+        inputType = Study.InputType.IMAGE_2D;
         transition(Status.UPLOADED, now);
+    }
+
+    /** A volume, handed to the ingest worker; the ids of the study and series it becomes are reserved now. */
+    public void markUploadedForIngest(Study.InputType volumeType, Instant now) {
+        requireStatus(Status.INIT);
+        if (!volumeType.isVolume()) {
+            throw new IllegalArgumentException(volumeType + " is not a volume input type");
+        }
+        inputType = volumeType;
+        reservedStudyId = UUID.randomUUID();
+        reservedSeriesId = UUID.randomUUID();
+        transition(Status.UPLOADED, now);
+    }
+
+    public boolean isVolume() {
+        return inputType != null && inputType.isVolume();
+    }
+
+    /** Where the ingest worker writes the normalised volume and its thumbnail. */
+    public String volumePrefix() {
+        return "studies/" + reservedStudyId + "/series/" + reservedSeriesId + "/";
+    }
+
+    public boolean isTerminal() {
+        return status == Status.DONE || status == Status.FAILED;
+    }
+
+    /** True if an ingest worker message for {@code messageAttempt} should still be applied. */
+    public boolean accepts(int messageAttempt) {
+        return !isTerminal() && messageAttempt == attempt;
     }
 
     public void markProcessing(Instant now) {
@@ -97,10 +164,32 @@ public class UploadSession {
         transition(Status.PROCESSING, now);
     }
 
+    /** Worker progress (0-100); never goes backwards within an attempt. Also counts as a sign of life. */
+    public void recordProgress(int value, Instant now) {
+        requireInProgress();
+        progress = (short) Math.max(progress, Math.min(100, Math.max(0, value)));
+        transition(Status.PROCESSING, now);
+    }
+
     public void markDone(UUID studyId, Instant now) {
-        requireStatus(Status.PROCESSING);
+        requireInProgress();
         this.studyId = studyId;
+        progress = 100;
+        error = null;
         transition(Status.DONE, now);
+    }
+
+    /** A failed ingest attempt: the next attempt starts right away (its dispatch waits for the backoff). */
+    public FailureOutcome failAttempt(String error, boolean retryable, int maxAttempts, Instant now) {
+        requireInProgress();
+        if (retryable && attempt < maxAttempts) {
+            attempt++;
+            progress = 0;
+            transition(Status.UPLOADED, now);
+            return FailureOutcome.RETRY_SCHEDULED;
+        }
+        markFailed(error, now);
+        return FailureOutcome.FAILED;
     }
 
     public void markFailed(String error, Instant now) {
@@ -111,6 +200,12 @@ public class UploadSession {
     private void requireStatus(Status expected) {
         if (status != expected) {
             throw new IllegalStateException("Upload " + id + " is " + status + ", expected " + expected);
+        }
+    }
+
+    private void requireInProgress() {
+        if (status != Status.UPLOADED && status != Status.PROCESSING) {
+            throw new IllegalStateException("Upload " + id + " is " + status + ", not in progress");
         }
     }
 

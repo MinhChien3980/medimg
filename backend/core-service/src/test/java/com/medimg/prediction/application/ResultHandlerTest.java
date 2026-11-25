@@ -2,6 +2,7 @@ package com.medimg.prediction.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -18,17 +19,21 @@ import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import com.medimg.imaging.application.StudyService;
 import com.medimg.prediction.application.WorkerResult.Type;
+import com.medimg.prediction.domain.Finding;
 import com.medimg.prediction.domain.JobStatus;
 import com.medimg.prediction.domain.PredictionJob;
+import com.medimg.prediction.domain.PredictionResult;
 import com.medimg.prediction.infrastructure.FindingRepository;
 import com.medimg.prediction.infrastructure.PredictionJobRepository;
 import com.medimg.prediction.infrastructure.PredictionResultRepository;
 import com.medimg.shared.storage.ObjectStoragePort;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 class ResultHandlerTest {
@@ -40,11 +45,13 @@ class ResultHandlerTest {
     private final JobOutbox outbox = mock(JobOutbox.class);
     private final StudyService studies = mock(StudyService.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final FindingRepository findings = mock(FindingRepository.class);
+    private final ObjectStoragePort storage = mock(ObjectStoragePort.class);
     private final PredictionProperties props = new PredictionProperties(3,
             List.of(Duration.ofSeconds(30), Duration.ofMinutes(2)), Duration.ofMinutes(2), Duration.ofMinutes(20),
             Duration.ofMinutes(30), Duration.ofSeconds(15), Duration.ofMinutes(30));
-    private final ResultHandler handler = new ResultHandler(jobs, results, mock(FindingRepository.class), outbox, studies,
-            mock(ObjectStoragePort.class), props, JsonMapper.builder().build(), events, Clock.fixed(NOW, ZoneOffset.UTC));
+    private final ResultHandler handler = new ResultHandler(jobs, results, findings, outbox, studies, storage, props,
+            JsonMapper.builder().build(), events, Clock.fixed(NOW, ZoneOffset.UTC));
 
     private final PredictionJob job = new PredictionJob(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "{}",
             null, UUID.randomUUID(), NOW.minusSeconds(60));
@@ -52,6 +59,56 @@ class ResultHandlerTest {
     ResultHandlerTest() {
         when(jobs.findById(job.getId())).thenReturn(Optional.of(job));
         when(studies.exists(job.getStudyId())).thenReturn(true);
+        when(storage.keyOf(anyString())).thenAnswer(i -> {
+            String uri = i.getArgument(0);
+            if (!uri.startsWith("s3://medimg/")) {
+                throw new IllegalArgumentException("Not an object of bucket medimg: " + uri);
+            }
+            return uri.substring("s3://medimg/".length());
+        });
+        when(results.save(any(PredictionResult.class))).thenAnswer(i -> i.getArgument(0));
+    }
+
+    @Test
+    void segmentationResultKeepsTheLabelmapTheMeshManifestAndTheVolumes() {
+        String out = "s3://medimg/predictions/" + job.getId() + "/1/";
+        String payload = """
+                {"modelVersion":"2.18.0-fast","inferenceMs":60000,
+                 "findings":[{"label":"liver","confidence":null,"volumeMl":1530.256,"bbox":null}],
+                 "artifacts":{"heatmaps":{},"segmentation":"%1$ssegmentation.nii.gz",
+                   "meshes":[{"label":"liver","color":"#DC6E50","uri":"%1$smeshes/liver.glb","triangles":49870,
+                              "volumeMl":1530.256,"centroid":[-60.5,25.0,-410.75]}]}}
+                """.formatted(out);
+
+        handler.handle(new WorkerResult(job.getId(), 1, "w1", Type.DONE, 0, payload, null, false));
+
+        assertThat(job.getStatus()).isEqualTo(JobStatus.DONE);
+        ArgumentCaptor<PredictionResult> result = ArgumentCaptor.forClass(PredictionResult.class);
+        verify(results).save(result.capture());
+        assertThat(result.getValue().getSegmentationKey()).isEqualTo("predictions/" + job.getId() + "/1/segmentation.nii.gz");
+        JsonNode mesh = JsonMapper.builder().build().readTree(result.getValue().getMeshes()).get(0);
+        assertThat(mesh.get("key").asString()).isEqualTo("predictions/" + job.getId() + "/1/meshes/liver.glb");
+        assertThat(mesh.get("color").asString()).isEqualTo("#DC6E50");
+        assertThat(mesh.get("triangles").asInt()).isEqualTo(49870);
+        assertThat(mesh.get("centroid").toString()).isEqualTo("[-60.5,25.0,-410.75]");
+        ArgumentCaptor<List<Finding>> saved = ArgumentCaptor.captor();
+        verify(findings).saveAll(saved.capture());
+        Finding liver = saved.getValue().getFirst();
+        assertThat(liver.getConfidence()).isNull();
+        assertThat(liver.getVolumeMl()).isEqualByComparingTo("1530.26");
+    }
+
+    @Test
+    void artifactOutsideTheBucketMakesTheResultUnreadable() {
+        String payload = """
+                {"findings":[],"artifacts":{"segmentation":"s3://other-bucket/segmentation.nii.gz"}}
+                """;
+
+        handler.handle(new WorkerResult(job.getId(), 1, "w1", Type.DONE, 0, payload, null, false));
+
+        assertThat(job.getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(job.getErrorMessage()).isEqualTo("Worker returned an unreadable result");
+        verify(results, never()).save(any());
     }
 
     @Test

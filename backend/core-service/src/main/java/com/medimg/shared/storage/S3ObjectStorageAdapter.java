@@ -1,5 +1,7 @@
 package com.medimg.shared.storage;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -134,6 +136,17 @@ class S3ObjectStorageAdapter implements ObjectStoragePort {
             return client.getObjectAsBytes(b -> b.bucket(props.bucket()).key(key)).asByteArray();
         } catch (NoSuchKeyException e) {
             throw new ObjectNotFoundException(key);
+        }
+    }
+
+    @Override
+    public byte[] getFirstBytes(String key, int maxBytes) {
+        try (var in = client.getObject(b -> b.bucket(props.bucket()).key(key).range("bytes=0-" + (maxBytes - 1)))) {
+            return in.readNBytes(maxBytes); // bounded even if the server ignores the range
+        } catch (NoSuchKeyException e) {
+            throw new ObjectNotFoundException(key);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

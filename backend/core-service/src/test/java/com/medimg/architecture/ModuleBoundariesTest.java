@@ -5,6 +5,7 @@ import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.sli
 
 import java.util.List;
 
+import com.medimg.shared.messaging.StreamPublisher;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -47,6 +48,12 @@ class ModuleBoundariesTest {
     static final ArchRule applicationDoesNotDependOnWebLayer = noClasses()
             .that().resideInAPackage("..application..")
             .should().dependOnClassesThat().resideInAPackage("..api..");
+
+    /** Streams are written only by the outbox relay, so every published message is backed by a committed outbox row. */
+    @ArchTest
+    static final ArchRule onlyTheOutboxRelayPublishesToStreams = noClasses()
+            .that().resideOutsideOfPackages("com.medimg.shared.outbox..", "com.medimg.shared.messaging..")
+            .should().dependOnClassesThat().areAssignableTo(StreamPublisher.class);
 
     @ArchTest
     static final ArchRule noCyclesBetweenModules = slices().matching("com.medimg.(*)..").should().beFreeOfCycles();

@@ -27,6 +27,7 @@ import com.medimg.prediction.application.PredictionDtos.ArtifactsDto;
 import com.medimg.prediction.application.PredictionDtos.CreatePrediction;
 import com.medimg.prediction.application.PredictionDtos.CreatedJob;
 import com.medimg.prediction.application.PredictionDtos.FindingDto;
+import com.medimg.prediction.application.PredictionDtos.MeshDto;
 import com.medimg.prediction.application.PredictionDtos.ModelDto;
 import com.medimg.prediction.application.PredictionDtos.ModelRef;
 import com.medimg.prediction.application.PredictionDtos.PredictionChanged;
@@ -56,6 +57,7 @@ public class PredictionService {
     private static final TypeReference<Map<String, String>> STRING_MAP = new TypeReference<>() { };
     private static final TypeReference<List<Double>> DOUBLE_LIST = new TypeReference<>() { };
     private static final TypeReference<Map<String, Object>> OBJECT_MAP = new TypeReference<>() { };
+    private static final TypeReference<List<MeshArtifact>> MESH_LIST = new TypeReference<>() { };
 
     private final PredictionJobRepository jobs;
     private final PredictionResultRepository results;
@@ -127,6 +129,10 @@ public class PredictionService {
                 .orElseThrow(() -> ApiException.badRequest("Unknown or inactive model " + cmd.modelCode()));
         if (!model.accepts(ref.inputType())) {
             throw ApiException.unprocessable("Model " + model.getCode() + " does not accept " + ref.inputType() + " input");
+        }
+        if (!model.supportsModality(ref.modality())) {
+            throw ApiException.unprocessable("Model " + model.getCode() + " is for " + model.getModality()
+                    + " images, the series is " + (ref.modality() == null ? "of unknown modality" : ref.modality()));
         }
         PredictionJob job = new PredictionJob(ref.studyId(), ref.seriesId(), model.getId(),
                 json.writeValueAsString(validatedParams(cmd.params())), cmd.idempotencyKey(), user, clock.instant());
@@ -232,28 +238,44 @@ public class PredictionService {
         Map<UUID, PredictionResult> resultByJob = results.findByJobIdIn(jobIds).stream()
                 .collect(Collectors.toMap(PredictionResult::getJobId, Function.identity()));
         Map<UUID, List<Finding>> findingsByResult = resultByJob.isEmpty() ? Map.of()
-                : findings.findByResultIdInOrderByConfidenceDesc(resultByJob.values().stream().map(PredictionResult::getId).toList())
+                : findings.findByResultIds(resultByJob.values().stream().map(PredictionResult::getId).toList())
                 .stream().collect(Collectors.groupingBy(Finding::getResultId));
 
         return list.stream().map(job -> {
             AiModel model = modelById.get(job.getModelId());
             PredictionResult result = job.getStatus() == JobStatus.DONE ? resultByJob.get(job.getId()) : null;
             List<FindingDto> fs = result == null ? List.of() : findingsByResult.getOrDefault(result.getId(), List.of()).stream()
-                    .map(f -> new FindingDto(f.getId(), f.getLabel(), f.getConfidence(),
+                    .map(f -> new FindingDto(f.getId(), f.getLabel(), f.getConfidence(), f.getVolumeMl(),
                             f.getBbox() == null ? null : json.readValue(f.getBbox(), DOUBLE_LIST), f.getReviewStatus()))
                     .toList();
-            Map<String, URI> heatmaps = new LinkedHashMap<>();
-            if (result != null && result.getHeatmaps() != null) {
-                json.readValue(result.getHeatmaps(), STRING_MAP)
-                        .forEach((label, key) -> heatmaps.put(label, storage.presignGet(key).url()));
-            }
             Instant finished = job.getFinishedAt();
             return new PredictionDto(job.getId(), job.getStudyId(), job.getSeriesId(), job.getStatus().name(),
                     job.getProgress(), job.getAttempt(),
                     model == null ? null : new ModelRef(model.getCode(), model.getVersion()),
                     job.getParams() == null ? Map.of() : json.readValue(job.getParams(), OBJECT_MAP),
                     result == null ? null : result.getInferenceMs(), job.getErrorMessage(), job.getQueuedAt(), finished,
-                    fs, new ArtifactsDto(heatmaps));
+                    fs, artifacts(result));
         }).toList();
+    }
+
+    /** Presigned URLs of the result's files. */
+    private ArtifactsDto artifacts(PredictionResult result) {
+        Map<String, URI> heatmaps = new LinkedHashMap<>();
+        if (result == null) {
+            return new ArtifactsDto(heatmaps, null, List.of());
+        }
+        if (result.getHeatmaps() != null) {
+            json.readValue(result.getHeatmaps(), STRING_MAP).forEach((label, key) -> heatmaps.put(label, url(key)));
+        }
+        List<MeshArtifact> stored = result.getMeshes() == null ? List.of() : json.readValue(result.getMeshes(), MESH_LIST);
+        List<MeshDto> meshes = stored.stream()
+                .map(m -> new MeshDto(m.label(), m.color(), url(m.key()), m.triangles(), m.volumeMl(), m.centroid()))
+                .toList();
+        return new ArtifactsDto(heatmaps, result.getSegmentationKey() == null ? null : url(result.getSegmentationKey()),
+                meshes);
+    }
+
+    private URI url(String key) {
+        return storage.presignGet(key).url();
     }
 }

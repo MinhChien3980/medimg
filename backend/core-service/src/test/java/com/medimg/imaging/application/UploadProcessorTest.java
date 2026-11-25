@@ -32,8 +32,8 @@ class UploadProcessorTest {
     private final UploadSessionRepository uploads = mock(UploadSessionRepository.class);
     private final ObjectStoragePort storage = mock(ObjectStoragePort.class);
     private final UploadProcessor processor = new UploadProcessor(uploads, mock(StudyRepository.class),
-            mock(SeriesRepository.class), mock(ImageFileRepository.class), storage,
-            new ImagingProperties(50_000_000, 256, Duration.ofMinutes(10)),
+            mock(SeriesRepository.class), mock(ImageFileRepository.class), storage, new RawUploads(storage),
+            new ImagingProperties(50_000_000, 256, Duration.ofMinutes(10), null),
             new TransactionTemplate(mock(PlatformTransactionManager.class)), Clock.fixed(NOW, ZoneOffset.UTC));
 
     private UploadSession session;

@@ -6,6 +6,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -49,6 +50,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
                 "The request conflicts with the current state of the data");
+        pd.setTitle("Conflict");
+        return pd;
+    }
+
+    /** Two requests changed the same aggregate at once (e.g. a double click on complete); the loser may retry. */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    ProblemDetail concurrentUpdate(OptimisticLockingFailureException ex) {
+        log.info("Concurrent update: {}", ex.getMessage());
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "The resource was changed by another request, please try again");
         pd.setTitle("Conflict");
         return pd;
     }

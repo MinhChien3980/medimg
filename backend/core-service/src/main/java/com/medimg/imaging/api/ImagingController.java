@@ -38,7 +38,7 @@ class ImagingController {
     record FileRequest(@NotBlank @Size(max = 255) String name, @Positive long size, @NotBlank @Size(max = 100) String contentType) {
     }
 
-    /** One file per upload (a single 2D image). */
+    /** One file per upload: a 2D image (PNG, JPEG), a ZIP of DICOM files or a NIfTI volume. */
     record InitRequest(@NotNull UUID patientId, @NotNull @Size(min = 1, max = 1) List<@Valid FileRequest> files,
                        @Size(max = 10) String modalityHint, @Size(max = 30) String bodyPartHint) {
     }

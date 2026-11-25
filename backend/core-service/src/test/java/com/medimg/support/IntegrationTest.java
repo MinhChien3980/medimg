@@ -38,7 +38,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 
-import com.medimg.prediction.application.JobQueuePort;
+import com.medimg.shared.messaging.StreamPublisher;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -85,9 +85,10 @@ public abstract class IntegrationTest {
         r.add("app.storage.endpoint", () -> s3);
         r.add("app.storage.public-endpoint", () -> s3);
         r.add("app.ai.retry-backoff", () -> "1s,1s");
-        r.add("app.ai.outbox.poll-interval", () -> "200ms");
-        r.add("app.ai.outbox.publish-backoff", () -> "200ms");
-        r.add("app.ai.outbox.max-publish-backoff", () -> "1s");
+        r.add("app.imaging.volume.retry-backoff", () -> "1s,1s");
+        r.add("app.outbox.poll-interval", () -> "200ms");
+        r.add("app.outbox.publish-backoff", () -> "200ms");
+        r.add("app.outbox.max-publish-backoff", () -> "1s");
     }
 
     @LocalServerPort
@@ -99,9 +100,9 @@ public abstract class IntegrationTest {
     @Autowired
     protected StringRedisTemplate redis;
 
-    /** The real Redis adapter; a test can make publishing fail. Stubbing is reset after each test. */
+    /** The real Redis publisher of the outbox relay; a test can make publishing fail. Stubbing is reset after each test. */
     @MockitoSpyBean
-    protected JobQueuePort jobQueue;
+    protected StreamPublisher streams;
 
     protected RestClient http;
 
@@ -170,8 +171,77 @@ public abstract class IntegrationTest {
     }
 
     protected HttpResponse<String> putObject(String presignedUrl, byte[] content) throws IOException, InterruptedException {
-        return raw.send(HttpRequest.newBuilder(URI.create(presignedUrl)).header("Content-Type", "image/png")
+        return putObject(presignedUrl, content, "image/png");
+    }
+
+    /** The content type must be the one declared at init: it is part of the signature. */
+    protected HttpResponse<String> putObject(String presignedUrl, byte[] content, String contentType)
+            throws IOException, InterruptedException {
+        return raw.send(HttpRequest.newBuilder(URI.create(presignedUrl)).header("Content-Type", contentType)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(content)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** Inits, uploads and completes a volume file; returns the upload as returned by complete. */
+    protected JsonNode startVolumeUpload(String token, String patientId, String name, byte[] content, String contentType)
+            throws IOException, InterruptedException {
+        Response init = post("/uploads/init", token, Map.of("patientId", patientId,
+                "files", List.of(Map.of("name", name, "size", content.length, "contentType", contentType))));
+        if (init.status() != 201) {
+            throw new IllegalStateException("init failed: " + init);
+        }
+        putObject(init.body().get("files").get(0).get("putUrl").asString(), content, contentType);
+        return post("/uploads/" + init.body().get("uploadId").asString() + "/complete", token, null).body();
+    }
+
+    /**
+     * Uploads a NIfTI volume and plays the ingest worker until the upload is DONE; returns {studyId, seriesId}. The
+     * worker would write the volume to the output prefix; presigned URLs do not need the objects to exist.
+     */
+    protected String[] uploadVolumeStudy(String token, String patientId) throws IOException, InterruptedException {
+        String uploadId = startVolumeUpload(token, patientId, "ct.nii.gz", TestFiles.gzip(TestFiles.nifti1()),
+                "application/gzip").get("uploadId").asString();
+        String prefix = awaitIngestMessage(uploadId, 1).get("outputPrefix");
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(prefix)));
+        await().atMost(Duration.ofSeconds(10))
+                .until(() -> "DONE".equals(get("/uploads/" + uploadId, token).body().get("status").asString()));
+        String studyId = get("/uploads/" + uploadId, token).body().get("studyId").asString();
+        return new String[] {studyId, get("/studies/" + studyId, token).body().get("series").get(0).get("id").asString()};
+    }
+
+    /** DONE payload of the ingest worker for a volume written under {@code outputPrefix}. */
+    protected static String volumePayload(String outputPrefix) {
+        return """
+                {"volumeUri":"%svolume.nii.gz","thumbnailUri":"%sthumb.png","modality":"CT",
+                 "dims":[512,512,301],"spacing":[0.78,0.78,1.5],"numSlices":301,"huRange":[-1024,3071],
+                 "sourceSeries":{"slices":301,"seriesCount":2}}
+                """.formatted(outputPrefix, outputPrefix);
+    }
+
+    /** Simulates the ingest worker writing to {@code imaging.results}. */
+    protected void ingestResult(String uploadId, Object attempt, String type, Map<String, String> extra) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("uploadId", uploadId);
+        fields.put("attempt", attempt.toString());
+        fields.put("workerId", "it-ingest");
+        fields.put("type", type);
+        fields.putAll(extra);
+        redis.opsForStream().add("imaging.results", fields);
+    }
+
+    /** All messages published for the upload to {@code imaging.jobs}. */
+    protected List<Map<String, String>> ingestMessages(String uploadId) {
+        return redis.<String, String>opsForStream().range("imaging.jobs", Range.unbounded()).stream()
+                .map(MapRecord::getValue)
+                .filter(fields -> uploadId.equals(fields.get("uploadId")))
+                .toList();
+    }
+
+    /** Waits until the outbox relay has published the given ingest attempt of the upload and returns that message. */
+    protected Map<String, String> awaitIngestMessage(String uploadId, int attempt) {
+        String expected = Integer.toString(attempt);
+        return await().atMost(Duration.ofSeconds(10)).until(
+                () -> ingestMessages(uploadId).stream().filter(m -> expected.equals(m.get("attempt"))).findFirst(),
+                Optional::isPresent).orElseThrow();
     }
 
     /** Simulates the ai-worker writing to {@code ai.results}. */

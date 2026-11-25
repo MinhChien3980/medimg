@@ -16,18 +16,18 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 
+import com.medimg.imaging.application.FileTypeDetector.FileType;
+
 /**
  * Validates and normalises a 2D image upload. Pure function (no I/O besides in-memory codecs) so it is unit-testable.
  * <ul>
- *   <li>file type from magic bytes, never from the extension</li>
+ *   <li>file type from magic bytes ({@link FileTypeDetector}), never from the extension</li>
  *   <li>at most {@value #MAX_PIXELS} pixels, checked from the header before decoding</li>
  *   <li>re-encoded as grayscale PNG → every EXIF/XMP/text chunk is dropped (de-identification)</li>
  *   <li>16-bit grayscale PNGs keep their bit depth</li>
  * </ul>
  */
 public final class ImageNormalizer {
-
-    public enum FileType { PNG, JPEG, DICOM, NIFTI, ZIP, UNKNOWN }
 
     public record Normalized(byte[] png, byte[] thumbnailPng, int width, int height, String sha256Original, FileType sourceType) {
     }
@@ -46,30 +46,11 @@ public final class ImageNormalizer {
     private ImageNormalizer() {
     }
 
-    public static FileType detect(byte[] b) {
-        if (b.length >= 8 && (b[0] & 0xFF) == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
-            return FileType.PNG;
-        }
-        if (b.length >= 3 && (b[0] & 0xFF) == 0xFF && (b[1] & 0xFF) == 0xD8 && (b[2] & 0xFF) == 0xFF) {
-            return FileType.JPEG;
-        }
-        if (b.length >= 132 && b[128] == 'D' && b[129] == 'I' && b[130] == 'C' && b[131] == 'M') {
-            return FileType.DICOM;
-        }
-        if (b.length >= 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4) {
-            return FileType.ZIP;
-        }
-        if (b.length >= 4 && (littleEndianInt(b) == 348 || littleEndianInt(b) == 540)) {
-            return FileType.NIFTI;
-        }
-        return FileType.UNKNOWN;
-    }
-
     public static Normalized normalize2d(byte[] original, int minDimension) {
-        FileType type = detect(original);
+        FileType type = FileTypeDetector.detect(original);
         if (type != FileType.PNG && type != FileType.JPEG) {
             throw new InvalidImageException(switch (type) {
-                case DICOM, NIFTI, ZIP -> type + " files are not supported yet (coming with 3D support); upload a PNG or JPEG";
+                case DICOM, NIFTI, ZIP -> type + " files are not supported as 2D images; upload a PNG or JPEG";
                 default -> "File is not a PNG or JPEG image";
             });
         }
@@ -151,9 +132,5 @@ public final class ImageNormalizer {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
-    }
-
-    private static int littleEndianInt(byte[] b) {
-        return (b[0] & 0xFF) | (b[1] & 0xFF) << 8 | (b[2] & 0xFF) << 16 | (b[3] & 0xFF) << 24;
     }
 }

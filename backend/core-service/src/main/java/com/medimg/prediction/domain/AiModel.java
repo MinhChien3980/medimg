@@ -44,6 +44,7 @@ public class AiModel {
     @Column(name = "input_types", nullable = false)
     private String inputTypes;
 
+    /** Comma separated, e.g. {@code CR,DX}; null when the model takes any modality. */
     private String modality;
 
     @Column(name = "body_part")
@@ -62,7 +63,15 @@ public class AiModel {
     private Instant createdAt;
 
     public boolean accepts(String inputType) {
-        return Arrays.stream(inputTypes.split(",")).map(String::trim).anyMatch(t -> t.equalsIgnoreCase(inputType));
+        return contains(inputTypes, inputType);
+    }
+
+    public boolean supportsModality(String seriesModality) {
+        return modality == null || (seriesModality != null && contains(modality, seriesModality));
+    }
+
+    private static boolean contains(String commaSeparated, String value) {
+        return Arrays.stream(commaSeparated.split(",")).map(String::trim).anyMatch(t -> t.equalsIgnoreCase(value));
     }
 
     public boolean is3d() {
