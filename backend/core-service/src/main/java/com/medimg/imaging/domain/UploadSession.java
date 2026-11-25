@@ -23,13 +23,14 @@ import lombok.NoArgsConstructor;
 /**
  * An upload and its processing.
  * <pre>
- * INIT ─(complete, 2D image)─► UPLOADED ─► PROCESSING (in process) ─► DONE | FAILED
- * INIT ─(complete, volume)───► UPLOADED ─(worker STARTED/PROGRESS)─► PROCESSING ─(DONE)─► DONE
+ * INIT ─(complete, PNG/JPEG)─► UPLOADED ─► PROCESSING (in process) ─► DONE | FAILED
+ * INIT ─(complete, other)────► UPLOADED ─(worker STARTED/PROGRESS)─► PROCESSING ─(DONE)─► DONE
  *                                 ▲                                      │
  *                                 └──(FAILED retryable, attempt &lt; max)──┘ (attempt+1)    otherwise ─► FAILED
+ * INIT ─(multipart upload never completed)─► FAILED
  * </pre>
- * A volume is processed by the ingest worker. Its messages carry the attempt number; messages of another attempt, and
- * any message once the upload is DONE or FAILED, are ignored.
+ * A DICOM file, a ZIP or a NIfTI volume is processed by the ingest worker. Its messages carry the attempt number;
+ * messages of another attempt, and any message once the upload is DONE or FAILED, are ignored.
  */
 @Entity
 @Table(name = "upload_session")
@@ -63,10 +64,25 @@ public class UploadSession {
     @Column(name = "total_bytes", nullable = false)
     private long totalBytes;
 
-    /** Detected from the file content when the upload is completed. */
+    /** Known at complete for a PNG/JPEG, a DICOM file and a NIfTI volume; for a ZIP once the ingest worker is done. */
     @Enumerated(EnumType.STRING)
     @Column(name = "input_type")
     private Study.InputType inputType;
+
+    /** What the ingest worker reads; null for a PNG/JPEG, which is processed in process. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ingest_input")
+    private IngestInput ingestInput;
+
+    /** Voxel spacing in mm requested for a stack of 2D images. */
+    @Column(name = "spacing_x")
+    private Double spacingX;
+
+    @Column(name = "spacing_y")
+    private Double spacingY;
+
+    @Column(name = "spacing_z")
+    private Double spacingZ;
 
     @Column(nullable = false)
     private short progress;
@@ -122,31 +138,45 @@ public class UploadSession {
         return f;
     }
 
-    /** A 2D image, processed in process. */
+    /** {@code spacingMm} is {@code [x, y, z]}. */
+    public void requestSpacing(List<Double> spacingMm) {
+        requireStatus(Status.INIT);
+        if (spacingMm.size() != 3) {
+            throw new IllegalArgumentException("Spacing must have three values: " + spacingMm);
+        }
+        spacingX = spacingMm.get(0);
+        spacingY = spacingMm.get(1);
+        spacingZ = spacingMm.get(2);
+    }
+
+    /** The requested voxel spacing {@code [x, y, z]} in mm, or null. */
+    public List<Double> requestedSpacing() {
+        return spacingX == null ? null : List.of(spacingX, spacingY, spacingZ);
+    }
+
+    /** A PNG or JPEG image, processed in process. */
     public void markUploaded(Instant now) {
         requireStatus(Status.INIT);
         inputType = Study.InputType.IMAGE_2D;
         transition(Status.UPLOADED, now);
     }
 
-    /** A volume, handed to the ingest worker; the ids of the study and series it becomes are reserved now. */
-    public void markUploadedForIngest(Study.InputType volumeType, Instant now) {
+    /** Handed to the ingest worker; the ids of the study and series it becomes are reserved now. */
+    public void markUploadedForIngest(IngestInput input, Instant now) {
         requireStatus(Status.INIT);
-        if (!volumeType.isVolume()) {
-            throw new IllegalArgumentException(volumeType + " is not a volume input type");
-        }
-        inputType = volumeType;
+        ingestInput = input;
+        inputType = input.knownInputType();
         reservedStudyId = UUID.randomUUID();
         reservedSeriesId = UUID.randomUUID();
         transition(Status.UPLOADED, now);
     }
 
-    public boolean isVolume() {
-        return inputType != null && inputType.isVolume();
+    public boolean isIngested() {
+        return ingestInput != null;
     }
 
-    /** Where the ingest worker writes the normalised volume and its thumbnail. */
-    public String volumePrefix() {
+    /** Where the ingest worker writes the normalised image or volume and its thumbnail. */
+    public String outputPrefix() {
         return "studies/" + reservedStudyId + "/series/" + reservedSeriesId + "/";
     }
 
@@ -177,6 +207,15 @@ public class UploadSession {
         progress = 100;
         error = null;
         transition(Status.DONE, now);
+    }
+
+    /** The ingest worker is done: the study was created under the reserved id, as {@code result}. */
+    public void markIngested(Study.InputType result, Instant now) {
+        if (!isIngested() || !ingestInput.canBecome(result)) {
+            throw new IllegalArgumentException(ingestInput + " input cannot become a " + result + " study");
+        }
+        markDone(reservedStudyId, now);
+        inputType = result;
     }
 
     /** A failed ingest attempt: the next attempt starts right away (its dispatch waits for the backoff). */

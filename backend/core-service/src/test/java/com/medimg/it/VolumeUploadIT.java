@@ -55,9 +55,9 @@ class VolumeUploadIT extends IntegrationTest {
         assertThat(row).containsEntry("type", "INGEST_DISPATCH");
         Map<String, String> msg = awaitIngestMessage(uploadId, 1);
         assertThat(msg.keySet()).containsExactlyInAnyOrder("uploadId", "attempt", "inputType", "inputUri", "outputPrefix",
-                "modalityHint", "bodyPartHint", "enqueuedAt");
+                "modalityHint", "bodyPartHint", "sliceSpacingMm", "enqueuedAt");
         assertThat(msg).containsEntry("attempt", "1").containsEntry("inputType", "NIFTI")
-                .containsEntry("modalityHint", "CT").containsEntry("bodyPartHint", "");
+                .containsEntry("modalityHint", "CT").containsEntry("bodyPartHint", "").containsEntry("sliceSpacingMm", "");
         assertThat(msg.get("inputUri")).startsWith("s3://medimg/uploads/" + uploadId + "/").endsWith("/abdomen.nii.gz");
         assertThat(msg.get("outputPrefix")).matches("s3://medimg/studies/[0-9a-f-]{36}/series/[0-9a-f-]{36}/");
         await().atMost(Duration.ofSeconds(5)).until(() -> "imaging.jobs".equals(jdbc.queryForObject(
@@ -69,7 +69,7 @@ class VolumeUploadIT extends IntegrationTest {
         assertThat(get("/uploads/" + uploadId, tech).body().get("status").asString()).isEqualTo("PROCESSING");
 
         String prefix = msg.get("outputPrefix");
-        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(prefix)));
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(prefix, "NIFTI")));
         await().atMost(Duration.ofSeconds(10)).until(() -> "DONE".equals(get("/uploads/" + uploadId, tech).body().get("status").asString()));
 
         JsonNode done = get("/uploads/" + uploadId, tech).body();
@@ -86,6 +86,7 @@ class VolumeUploadIT extends IntegrationTest {
         assertThat(series.get("thumbnailUrl").asString()).contains("/thumb.png");
         assertThat(series.get("dims").toString()).isEqualTo("[512,512,301]");
         assertThat(series.get("spacing").toString()).isEqualTo("[0.78,0.78,1.5]");
+        assertThat(series.get("spacingAssumed").asBoolean()).isFalse();
         assertThat(series.get("numImages").asInt()).isEqualTo(301);
         assertThat(series.get("modality").asString()).isEqualTo("CT");
 
@@ -105,9 +106,9 @@ class VolumeUploadIT extends IntegrationTest {
 
         JsonNode completed = startVolumeUpload(tech, patientId, "series.zip", TestFiles.zip(), "application/x-zip-compressed");
         String uploadId = completed.get("uploadId").asString();
-        assertThat(completed.get("inputType").asString()).isEqualTo("DICOM_SERIES");
+        assertThat(completed.get("inputType").isNull()).isTrue(); // the worker tells what the ZIP holds
         Map<String, String> first = awaitIngestMessage(uploadId, 1);
-        assertThat(first).containsEntry("inputType", "DICOM_SERIES");
+        assertThat(first).containsEntry("inputType", "ZIP");
 
         ingestResult(uploadId, 1, "STARTED", Map.of());
         ingestResult(uploadId, 1, "FAILED", Map.of("error", "S3 timeout", "retryable", "true"));
@@ -118,7 +119,7 @@ class VolumeUploadIT extends IntegrationTest {
         assertThat(retrying.get("error").isNull()).isTrue();
 
         // a late DONE of attempt 1 is ignored
-        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(first.get("outputPrefix"))));
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(first.get("outputPrefix"), "DICOM_SERIES")));
         ingestResult(uploadId, 2, "FAILED", Map.of("error", "Series has 12 slices; at least 20 are needed", "retryable", "false"));
 
         await().atMost(Duration.ofSeconds(10)).until(() -> "FAILED".equals(get("/uploads/" + uploadId, tech).body().get("status").asString()));
@@ -138,7 +139,7 @@ class VolumeUploadIT extends IntegrationTest {
 
         JsonNode pngAsVolume = startVolumeUpload(tech, patientId, "fake.nii.gz", png(300, 300), "application/gzip");
         assertThat(pngAsVolume.get("status").asString()).isEqualTo("FAILED");
-        assertThat(pngAsVolume.get("error").asString()).contains("neither a ZIP archive").contains("NIfTI");
+        assertThat(pngAsVolume.get("error").asString()).contains("not a NIfTI volume");
         assertThat(pngAsVolume.get("inputType").isNull()).isTrue();
 
         JsonNode volumeAsPng = startVolumeUpload(tech, patientId, "scan.png", TestFiles.nifti1(), "image/png");
@@ -181,7 +182,7 @@ class VolumeUploadIT extends IntegrationTest {
                 .get("uploadId").asString();
         awaitIngestMessage(uploadId, 1);
 
-        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload("s3://medimg/studies/elsewhere/")));
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload("s3://medimg/studies/elsewhere/", "NIFTI")));
 
         await().atMost(Duration.ofSeconds(10)).until(() -> "FAILED".equals(get("/uploads/" + uploadId, tech).body().get("status").asString()));
         assertThat(get("/uploads/" + uploadId, tech).body().get("error").asString()).contains("unreadable result");
@@ -203,10 +204,93 @@ class VolumeUploadIT extends IntegrationTest {
 
         JsonNode failed = get("/uploads/" + silent, tech).body();
         assertThat(failed.get("status").asString()).isEqualTo("FAILED");
-        assertThat(failed.get("error").asString()).contains("upload the volume again");
+        assertThat(failed.get("error").asString()).contains("upload the file again");
         assertThat(jdbc.queryForObject("select count(*) from outbox_message where aggregate_id = ?::uuid and published_at is null",
                 Long.class, silent)).isZero();
         assertThat(get("/uploads/" + slow, tech).body().get("status").asString()).isEqualTo("UPLOADED");
+    }
+
+    @Test
+    void dicomXrayIsIngestedIntoA2dStudyThatTheChestModelAccepts() throws Exception {
+        String doctor = login("doctor");
+        String patientId = createCase(doctor);
+
+        JsonNode completed = startVolumeUpload(doctor, patientId, "cxr.dcm", TestFiles.dicom(), "application/dicom");
+        String uploadId = completed.get("uploadId").asString();
+        assertThat(completed.get("inputType").asString()).isEqualTo("DICOM_2D");
+        Map<String, String> msg = awaitIngestMessage(uploadId, 1);
+        assertThat(msg).containsEntry("inputType", "DICOM_2D").containsEntry("modalityHint", "CR")
+                .containsEntry("bodyPartHint", "CHEST");
+
+        String prefix = msg.get("outputPrefix");
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", """
+                {"inputType":"DICOM_2D","imageUri":"%1$simage.png","thumbnailUri":"%1$sthumb.png","modality":"DX",
+                 "dims":[2048,2500,1],"spacing":[0.143,0.143,null]}
+                """.formatted(prefix)));
+        await().atMost(Duration.ofSeconds(10)).until(() -> "DONE".equals(get("/uploads/" + uploadId, doctor).body().get("status").asString()));
+
+        String studyId = get("/uploads/" + uploadId, doctor).body().get("studyId").asString();
+        JsonNode study = get("/studies/" + studyId, doctor).body();
+        assertThat(study.get("inputType").asString()).isEqualTo("DICOM_2D");
+        assertThat(study.get("modality").asString()).isEqualTo("DX");
+        JsonNode series = study.get("series").get(0);
+        assertThat(series.get("imageUrl").asString()).contains("/image.png");
+        assertThat(series.get("volumeUrl").isNull()).isTrue();
+        assertThat(series.get("cols").asInt()).isEqualTo(2048);
+        assertThat(series.get("rows").asInt()).isEqualTo(2500);
+        assertThat(series.get("spacingAssumed").asBoolean()).isFalse();
+
+        Response job = post("/predictions", doctor, Map.of("studyId", studyId, "seriesId", series.get("id").asString(),
+                "modelCode", "cxr-multilabel"));
+        assertThat(job.status()).isEqualTo(202);
+        Map<String, String> aiJob = awaitJobMessage(job.body().get("jobId").asString(), 1);
+        assertThat(aiJob).containsEntry("inputType", "IMAGE_2D").containsEntry("inputUri", prefix + "image.png");
+    }
+
+    @Test
+    void zipOfImageSlicesCarriesTheRequestedSpacingAndBecomesAnImageStack() throws Exception {
+        String tech = login("tech");
+        String patientId = createCase(tech);
+        byte[] zip = TestFiles.zip();
+        Response init = post("/uploads/init", tech, Map.of("patientId", patientId, "sliceSpacingMm", List.of(0.5, 0.5, 2),
+                "files", List.of(Map.of("name", "slices.zip", "size", zip.length, "contentType", "application/zip"))));
+        String uploadId = init.body().get("uploadId").asString();
+        putObject(init.body().get("files").get(0).get("putUrl").asString(), zip, "application/zip");
+        post("/uploads/" + uploadId + "/complete", tech, null);
+
+        Map<String, String> msg = awaitIngestMessage(uploadId, 1);
+        assertThat(msg).containsEntry("inputType", "ZIP").containsEntry("sliceSpacingMm", "[0.5,0.5,2.0]");
+
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(msg.get("outputPrefix"), "IMAGE_STACK")
+                .replace("\"spacingAssumed\":false", "\"spacingAssumed\":true")));
+        await().atMost(Duration.ofSeconds(10)).until(() -> "DONE".equals(get("/uploads/" + uploadId, tech).body().get("status").asString()));
+
+        JsonNode done = get("/uploads/" + uploadId, tech).body();
+        assertThat(done.get("inputType").asString()).isEqualTo("IMAGE_STACK");
+        JsonNode study = get("/studies/" + done.get("studyId").asString(), tech).body();
+        assertThat(study.get("inputType").asString()).isEqualTo("IMAGE_STACK");
+        assertThat(study.get("series").get(0).get("volumeUrl").asString()).contains("/volume.nii.gz");
+        assertThat(study.get("series").get(0).get("spacingAssumed").asBoolean()).isTrue();
+    }
+
+    @Test
+    void sliceSpacingMustBeThreeSensibleValuesForAZip() {
+        String tech = login("tech");
+        String patientId = createCase(tech);
+
+        assertThat(initWithSpacing(tech, patientId, "slices.zip", List.of(1, 1)).status()).isEqualTo(400);
+        assertThat(initWithSpacing(tech, patientId, "slices.zip", List.of(1, 1, 25)).status()).isEqualTo(400);
+        assertThat(initWithSpacing(tech, patientId, "slices.zip", List.of(0, 1, 1)).status()).isEqualTo(400);
+        Response notZip = initWithSpacing(tech, patientId, "ct.nii", List.of(1, 1, 1));
+        assertThat(notZip.status()).isEqualTo(400);
+        assertThat(notZip.body().get("detail").asString()).contains("only applies to a ZIP");
+        assertThat(initWithSpacing(tech, patientId, "slices.zip", List.of(0.01, 20, 3.5)).status()).isEqualTo(201);
+    }
+
+    private Response initWithSpacing(String token, String patientId, String name, List<Number> spacing) {
+        String contentType = name.endsWith(".zip") ? "application/zip" : "application/octet-stream";
+        return post("/uploads/init", token, Map.of("patientId", patientId, "sliceSpacingMm", spacing,
+                "files", List.of(Map.of("name", name, "size", 1000, "contentType", contentType))));
     }
 
     private Response init(String token, String patientId, String name, long size, String contentType) {

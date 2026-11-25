@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -19,21 +20,59 @@ class UploadSessionTest {
     private final UploadSession upload = new UploadSession(UUID.randomUUID(), "CT", null, UUID.randomUUID(), NOW);
 
     @Test
-    void volumeUploadReservesTheIdsOfItsStudyAndSeries() {
-        upload.markUploadedForIngest(InputType.DICOM_SERIES, NOW);
+    void ingestedUploadReservesTheIdsOfItsStudyAndSeries() {
+        upload.markUploadedForIngest(IngestInput.ZIP, NOW);
 
         assertThat(upload.getStatus()).isEqualTo(Status.UPLOADED);
-        assertThat(upload.isVolume()).isTrue();
+        assertThat(upload.isIngested()).isTrue();
         assertThat(upload.getAttempt()).isEqualTo((short) 1);
-        assertThat(upload.volumePrefix())
+        assertThat(upload.outputPrefix())
                 .isEqualTo("studies/" + upload.getReservedStudyId() + "/series/" + upload.getReservedSeriesId() + "/");
         assertThat(upload.getStudyId()).isNull();
     }
 
     @Test
-    void onlyVolumeTypesAreIngested() {
-        assertThatThrownBy(() -> upload.markUploadedForIngest(InputType.IMAGE_2D, NOW))
-                .isInstanceOf(IllegalArgumentException.class);
+    void inputTypeIsKnownAtCompleteUnlessTheWorkerDecides() {
+        UploadSession dicom = new UploadSession(UUID.randomUUID(), "CR", "CHEST", UUID.randomUUID(), NOW);
+        dicom.markUploadedForIngest(IngestInput.DICOM_2D, NOW);
+        upload.markUploadedForIngest(IngestInput.ZIP, NOW);
+
+        assertThat(dicom.getInputType()).isEqualTo(InputType.DICOM_2D);
+        assertThat(upload.getInputType()).isNull();
+    }
+
+    @Test
+    void ingestedUploadBecomesWhatItsInputCanBecome() {
+        upload.markUploadedForIngest(IngestInput.ZIP, NOW);
+
+        assertThatThrownBy(() -> upload.markIngested(InputType.NIFTI, NOW)).isInstanceOf(IllegalArgumentException.class);
+        upload.markIngested(InputType.IMAGE_STACK, NOW);
+
+        assertThat(upload.getStatus()).isEqualTo(Status.DONE);
+        assertThat(upload.getInputType()).isEqualTo(InputType.IMAGE_STACK);
+        assertThat(upload.getStudyId()).isEqualTo(upload.getReservedStudyId());
+    }
+
+    @Test
+    void requestedSpacingIsThreeValues() {
+        assertThat(upload.requestedSpacing()).isNull();
+        assertThatThrownBy(() -> upload.requestSpacing(List.of(1.0, 1.0))).isInstanceOf(IllegalArgumentException.class);
+
+        upload.requestSpacing(List.of(0.5, 0.5, 2.0));
+
+        assertThat(upload.requestedSpacing()).containsExactly(0.5, 0.5, 2.0);
+    }
+
+    @Test
+    void fileUploadedInPartsHasAtLeastOnePart() {
+        UploadFile file = upload.addFile("ct.zip", 100, "application/zip");
+        assertThat(file.isMultipart()).isFalse();
+        assertThatThrownBy(() -> file.uploadInParts("mp-1", 0)).isInstanceOf(IllegalArgumentException.class);
+
+        file.uploadInParts("mp-1", 3);
+
+        assertThat(file.isMultipart()).isTrue();
+        assertThat(file.getPartCount()).isEqualTo(3);
     }
 
     @Test
@@ -41,13 +80,13 @@ class UploadSessionTest {
         upload.markUploaded(NOW);
 
         assertThat(upload.getInputType()).isEqualTo(InputType.IMAGE_2D);
-        assertThat(upload.isVolume()).isFalse();
+        assertThat(upload.isIngested()).isFalse();
         assertThat(upload.getReservedStudyId()).isNull();
     }
 
     @Test
     void progressStartsProcessingAndNeverGoesBackwards() {
-        upload.markUploadedForIngest(InputType.NIFTI, NOW);
+        upload.markUploadedForIngest(IngestInput.NIFTI, NOW);
 
         upload.recordProgress(40, NOW.plusSeconds(5));
         upload.recordProgress(20, NOW.plusSeconds(6));
@@ -60,7 +99,7 @@ class UploadSessionTest {
 
     @Test
     void retryableFailureStartsTheNextAttemptUntilTheLast() {
-        upload.markUploadedForIngest(InputType.NIFTI, NOW);
+        upload.markUploadedForIngest(IngestInput.NIFTI, NOW);
         upload.recordProgress(30, NOW);
 
         assertThat(upload.failAttempt("S3 timeout", true, 3, NOW)).isEqualTo(FailureOutcome.RETRY_SCHEDULED);
@@ -79,7 +118,7 @@ class UploadSessionTest {
 
     @Test
     void permanentFailureEndsTheUpload() {
-        upload.markUploadedForIngest(InputType.NIFTI, NOW);
+        upload.markUploadedForIngest(IngestInput.NIFTI, NOW);
 
         assertThat(upload.failAttempt("Not a 3D volume", false, 3, NOW)).isEqualTo(FailureOutcome.FAILED);
 
@@ -89,7 +128,7 @@ class UploadSessionTest {
 
     @Test
     void doneIsReachedFromAnyInProgressStateOnly() {
-        upload.markUploadedForIngest(InputType.NIFTI, NOW);
+        upload.markUploadedForIngest(IngestInput.NIFTI, NOW);
         UUID studyId = upload.getReservedStudyId();
 
         upload.markDone(studyId, NOW);
@@ -104,7 +143,7 @@ class UploadSessionTest {
     void completeOnlyOnce() {
         upload.markUploaded(NOW);
 
-        assertThatThrownBy(() -> upload.markUploadedForIngest(InputType.NIFTI, NOW)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> upload.markUploadedForIngest(IngestInput.NIFTI, NOW)).isInstanceOf(IllegalStateException.class);
     }
 
     @Test

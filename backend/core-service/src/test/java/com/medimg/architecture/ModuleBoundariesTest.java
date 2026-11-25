@@ -19,7 +19,7 @@ import com.tngtech.archunit.lang.CompositeArchRule;
 @AnalyzeClasses(packages = "com.medimg", importOptions = ImportOption.DoNotIncludeTests.class)
 class ModuleBoundariesTest {
 
-    private static final List<String> MODULES = List.of("identity", "patient", "imaging", "prediction", "audit");
+    private static final List<String> MODULES = List.of("identity", "patient", "imaging", "prediction", "sample", "audit");
 
     /** Other modules may only use a module's {@code application} package (services, ports, DTOs). */
     @ArchTest

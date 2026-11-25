@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
+import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
@@ -47,6 +48,10 @@ public class Patient {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** Null unless the case is a sample case. */
+    @Embedded
+    private Sample sample;
+
     public Patient(String code, Short birthYear, String sex, String note, UUID createdBy, Instant now) {
         this.id = UUID.randomUUID();
         this.code = code;
@@ -62,6 +67,18 @@ public class Patient {
         this.sex = sex;
         this.note = note;
         this.updatedAt = now;
+    }
+
+    public void markAsSample(Sample sample, Instant now) {
+        this.sample = sample;
+        this.updatedAt = now;
+    }
+
+    public void unmarkAsSample(Instant now) {
+        if (sample != null) {
+            this.sample = null;
+            this.updatedAt = now;
+        }
     }
 
     public void softDelete(Instant now) {

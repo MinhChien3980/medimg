@@ -1,6 +1,7 @@
 package com.medimg.imaging.application;
 
 import java.net.URI;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -47,10 +48,14 @@ public class StudyService {
     @Transactional(readOnly = true)
     public List<StudyDto> listByPatient(UUID patientId) {
         patients.requireExists(patientId);
-        List<Study> list = studies.findByPatientIdOrderByCreatedAtDesc(patientId);
-        Map<UUID, List<Series>> byStudy = series.findByStudyIdIn(list.stream().map(Study::getId).toList()).stream()
-                .collect(Collectors.groupingBy(Series::getStudyId));
-        return list.stream().map(s -> toDto(s, byStudy.getOrDefault(s.getId(), List.of()))).toList();
+        return toDtos(studies.findByPatientIdInOrderByCreatedAtDesc(List.of(patientId)));
+    }
+
+    /** Studies of each of the given cases, newest first; for cases the caller has already checked. */
+    @Transactional(readOnly = true)
+    public Map<UUID, List<StudyDto>> listByPatients(Collection<UUID> patientIds) {
+        return toDtos(studies.findByPatientIdInOrderByCreatedAtDesc(patientIds)).stream()
+                .collect(Collectors.groupingBy(StudyDto::patientId));
     }
 
     /** For the prediction module: validates that the series belongs to the study. */
@@ -83,6 +88,12 @@ public class StudyService {
         return studies.findById(id).filter(s -> patients.exists(s.getPatientId()));
     }
 
+    private List<StudyDto> toDtos(List<Study> list) {
+        Map<UUID, List<Series>> byStudy = series.findByStudyIdIn(list.stream().map(Study::getId).toList()).stream()
+                .collect(Collectors.groupingBy(Series::getStudyId));
+        return list.stream().map(s -> toDto(s, byStudy.getOrDefault(s.getId(), List.of()))).toList();
+    }
+
     private StudyDto toDto(Study study, List<Series> seriesList) {
         return new StudyDto(study.getId(), study.getPatientId(), study.getInputType().name(), study.getModality(),
                 study.getBodyPart(), study.getCreatedAt(),
@@ -93,7 +104,7 @@ public class StudyService {
         URI stored = url(s.getImageKey());
         return new SeriesDto(s.getId(), s.getModality(), s.getRows(), s.getCols(), s.getNumImages(),
                 volume ? null : stored, url(s.getThumbnailKey()), volume ? stored : null,
-                volume ? s.dims() : null, volume ? s.spacing() : null);
+                volume ? s.dims() : null, volume ? s.spacing() : null, s.isSpacingAssumed());
     }
 
     private URI url(String key) {

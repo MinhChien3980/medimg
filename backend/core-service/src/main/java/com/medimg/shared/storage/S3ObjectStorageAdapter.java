@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.time.Duration;
+import java.util.List;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -23,13 +24,16 @@ import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.UploadPartPresignRequest;
 
 /**
  * S3 adapter. Two endpoints: {@code endpoint} for server-side calls, {@code publicEndpoint} for presigned URLs
@@ -120,6 +124,45 @@ class S3ObjectStorageAdapter implements ObjectStoragePort {
         var presigned = presigner.presignPutObject(PutObjectPresignRequest.builder()
                 .signatureDuration(props.presignTtl()).putObjectRequest(put).build());
         return new PresignedUrl(toUri(presigned.url()), presigned.expiration());
+    }
+
+    @Override
+    public String createMultipartUpload(String key, String contentType) {
+        return client.createMultipartUpload(b -> b.bucket(props.bucket()).key(key).contentType(contentType)).uploadId();
+    }
+
+    /** The content length is signed, so each part must have exactly its expected size. */
+    @Override
+    public PresignedUrl presignUploadPart(String key, String uploadId, int partNumber, long contentLength,
+                                          Duration validity) {
+        var part = UploadPartRequest.builder().bucket(props.bucket()).key(key).uploadId(uploadId)
+                .partNumber(partNumber).contentLength(contentLength).build();
+        var presigned = presigner.presignUploadPart(UploadPartPresignRequest.builder()
+                .signatureDuration(validity).uploadPartRequest(part).build());
+        return new PresignedUrl(toUri(presigned.url()), presigned.expiration());
+    }
+
+    /** A 4xx answer means the parts or the upload id are wrong; anything else (5xx, network) is left to the caller. */
+    @Override
+    public void completeMultipartUpload(String key, String uploadId, List<UploadedPart> parts) {
+        List<CompletedPart> completed = parts.stream()
+                .map(p -> CompletedPart.builder().partNumber(p.partNumber()).eTag(p.etag()).build())
+                .toList();
+        try {
+            client.completeMultipartUpload(b -> b.bucket(props.bucket()).key(key).uploadId(uploadId)
+                    .multipartUpload(m -> m.parts(completed)));
+        } catch (S3Exception e) {
+            if (e.statusCode() >= 400 && e.statusCode() < 500) {
+                throw new MultipartUploadRejectedException(key, e.awsErrorDetails() == null
+                        ? "HTTP " + e.statusCode() : e.awsErrorDetails().errorCode());
+            }
+            throw e;
+        }
+    }
+
+    @Override
+    public void abortMultipartUpload(String key, String uploadId) {
+        client.abortMultipartUpload(b -> b.bucket(props.bucket()).key(key).uploadId(uploadId));
     }
 
     @Override

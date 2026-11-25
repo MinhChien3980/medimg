@@ -11,7 +11,7 @@ import com.medimg.imaging.domain.Study;
 
 public interface StudyRepository extends JpaRepository<Study, UUID> {
 
-    List<Study> findByPatientIdOrderByCreatedAtDesc(UUID patientId);
+    List<Study> findByPatientIdInOrderByCreatedAtDesc(Collection<UUID> patientIds);
 
     @Query("select s.patientId as patientId, count(s) as total from Study s where s.patientId in :ids group by s.patientId")
     List<PatientStudyCount> countByPatientIds(Collection<UUID> ids);

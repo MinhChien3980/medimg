@@ -56,6 +56,10 @@ public class Series {
     @Column(name = "spacing_z")
     private Double spacingZ;
 
+    /** True when the spacing of a stack of 2D images was not given and 1 mm was assumed. */
+    @Column(name = "spacing_assumed", nullable = false)
+    private boolean spacingAssumed;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -74,11 +78,12 @@ public class Series {
 
     /** {@code dims} and {@code spacing} are {@code [x, y, z]}. */
     public static Series volume(UUID id, UUID studyId, String modality, List<Integer> dims, List<Double> spacing,
-                                String volumeKey, String thumbnailKey, Instant now) {
+                                boolean spacingAssumed, String volumeKey, String thumbnailKey, Instant now) {
         Series s = new Series(id, studyId, modality, dims.get(2), dims.get(1), dims.get(0), volumeKey, thumbnailKey, now);
         s.spacingX = spacing.get(0);
         s.spacingY = spacing.get(1);
         s.spacingZ = spacing.get(2);
+        s.spacingAssumed = spacingAssumed;
         return s;
     }
 

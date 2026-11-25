@@ -27,6 +27,7 @@ import com.medimg.prediction.application.PredictionDtos.ArtifactsDto;
 import com.medimg.prediction.application.PredictionDtos.CreatePrediction;
 import com.medimg.prediction.application.PredictionDtos.CreatedJob;
 import com.medimg.prediction.application.PredictionDtos.FindingDto;
+import com.medimg.prediction.application.PredictionDtos.JobSummary;
 import com.medimg.prediction.application.PredictionDtos.MeshDto;
 import com.medimg.prediction.application.PredictionDtos.ModelDto;
 import com.medimg.prediction.application.PredictionDtos.ModelRef;
@@ -152,6 +153,20 @@ public class PredictionService {
     public List<PredictionDto> listByStudy(UUID studyId) {
         studies.requireExists(studyId);
         return toDtos(jobs.findByStudyIdOrderByQueuedAtDesc(studyId));
+    }
+
+    /** The most recently queued job of each of the given studies that has one. */
+    @Transactional(readOnly = true)
+    public Map<UUID, JobSummary> latestByStudy(Collection<UUID> studyIds) {
+        if (studyIds.isEmpty()) {
+            return Map.of();
+        }
+        List<PredictionJob> latest = jobs.findLatestByStudyIds(studyIds);
+        Map<UUID, String> codeByModel = models.findAllById(latest.stream().map(PredictionJob::getModelId).distinct().toList())
+                .stream().collect(Collectors.toMap(AiModel::getId, AiModel::getCode));
+        return latest.stream().collect(Collectors.toMap(PredictionJob::getStudyId,
+                j -> new JobSummary(j.getId(), codeByModel.get(j.getModelId()), j.getStatus().name()),
+                (a, b) -> a)); // two jobs queued at the same instant: either is the latest
     }
 
     @Transactional

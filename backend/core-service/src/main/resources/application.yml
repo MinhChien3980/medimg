@@ -88,17 +88,26 @@ app:
     secret-key: ${S3_SECRET_KEY:medimg-dev-secret}
     presign-ttl: 15m
   imaging:
-    # 2D images (PNG, JPEG), processed in core-service
+    # 2D images (PNG, JPEG processed in core-service; DICOM by the ingest worker)
     max-upload-bytes: 52428800
     min-image-dimension: 256
     processing-timeout: 10m
-    # Volumes (ZIP of DICOM files, NIfTI), handed to the ingest worker through the outbox (imaging.jobs)
+    # DICOM files, ZIPs (DICOM series or stack of 2D images) and NIfTI volumes, handed to the ingest worker through
+    # the outbox (imaging.jobs); max-upload-bytes is the limit of a ZIP or NIfTI file
     volume:
       max-upload-bytes: 524288000
       # no news from the ingest worker for this long → the upload fails
       processing-timeout: 30m
       max-attempts: 3
       retry-backoff: 30s,2m
+    # Larger files are uploaded in parts, so that no request exceeds the 100 MB limit of Cloudflare Tunnel. Part URLs
+    # are valid for 1 h (enough for 500 MB at ~1.2 Mbit/s; a part started before then still completes); a multipart
+    # upload still not completed after abandon-after is aborted.
+    multipart:
+      threshold: 64MB
+      part-size: 32MB
+      url-validity: 1h
+      abandon-after: 2h
     result-stream:
       consumer-name: ${HOSTNAME:core-1}
       max-deliveries: 5

@@ -1,7 +1,9 @@
 package com.medimg.shared.storage;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Object storage abstraction over the S3 API (SeaweedFS in the provided deployment).
@@ -12,7 +14,27 @@ public interface ObjectStoragePort {
     record PresignedUrl(URI url, Instant expiresAt) {
     }
 
+    /** A part of a multipart upload: its number (from 1) and the ETag the storage returned when it was uploaded. */
+    record UploadedPart(int partNumber, String etag) {
+    }
+
     PresignedUrl presignPut(String key, String contentType, long contentLength);
+
+    /** Starts a multipart upload of {@code key}; returns its upload id. */
+    String createMultipartUpload(String key, String contentType);
+
+    /** A presigned UploadPart request for a part of exactly {@code contentLength} bytes. */
+    PresignedUrl presignUploadPart(String key, String uploadId, int partNumber, long contentLength, Duration validity);
+
+    /**
+     * Assembles the object from its parts, given in ascending part number order.
+     *
+     * @throws MultipartUploadRejectedException if the storage rejects the parts or does not know the upload
+     */
+    void completeMultipartUpload(String key, String uploadId, List<UploadedPart> parts);
+
+    /** Drops a multipart upload and the parts uploaded so far. */
+    void abortMultipartUpload(String key, String uploadId);
 
     PresignedUrl presignGet(String key);
 

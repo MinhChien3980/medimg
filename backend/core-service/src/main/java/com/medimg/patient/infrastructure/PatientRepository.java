@@ -1,5 +1,6 @@
 package com.medimg.patient.infrastructure;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +20,9 @@ public interface PatientRepository extends JpaRepository<Patient, UUID> {
                    or lower(coalesce(p.note, '')) like lower(concat('%', :q, '%')))
             """)
     Page<Patient> search(String q, Pageable pageable);
+
+    @Query("select p from Patient p where p.deletedAt is null and p.sample.title is not null order by p.sample.title")
+    List<Patient> findSamples();
 
     Optional<Patient> findByIdAndDeletedAtIsNull(UUID id);
 

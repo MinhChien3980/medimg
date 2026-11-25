@@ -86,6 +86,9 @@ public abstract class IntegrationTest {
         r.add("app.storage.public-endpoint", () -> s3);
         r.add("app.ai.retry-backoff", () -> "1s,1s");
         r.add("app.imaging.volume.retry-backoff", () -> "1s,1s");
+        // small enough for a test file to go in parts; S3 parts other than the last are at least 5 MiB
+        r.add("app.imaging.multipart.threshold", () -> "6MB");
+        r.add("app.imaging.multipart.part-size", () -> "5MB");
         r.add("app.outbox.poll-interval", () -> "200ms");
         r.add("app.outbox.publish-backoff", () -> "200ms");
         r.add("app.outbox.max-publish-backoff", () -> "1s");
@@ -201,20 +204,20 @@ public abstract class IntegrationTest {
         String uploadId = startVolumeUpload(token, patientId, "ct.nii.gz", TestFiles.gzip(TestFiles.nifti1()),
                 "application/gzip").get("uploadId").asString();
         String prefix = awaitIngestMessage(uploadId, 1).get("outputPrefix");
-        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(prefix)));
+        ingestResult(uploadId, 1, "DONE", Map.of("payload", volumePayload(prefix, "NIFTI")));
         await().atMost(Duration.ofSeconds(10))
                 .until(() -> "DONE".equals(get("/uploads/" + uploadId, token).body().get("status").asString()));
         String studyId = get("/uploads/" + uploadId, token).body().get("studyId").asString();
         return new String[] {studyId, get("/studies/" + studyId, token).body().get("series").get(0).get("id").asString()};
     }
 
-    /** DONE payload of the ingest worker for a volume written under {@code outputPrefix}. */
-    protected static String volumePayload(String outputPrefix) {
+    /** DONE payload of the ingest worker for a volume of {@code inputType} written under {@code outputPrefix}. */
+    protected static String volumePayload(String outputPrefix, String inputType) {
         return """
-                {"volumeUri":"%svolume.nii.gz","thumbnailUri":"%sthumb.png","modality":"CT",
-                 "dims":[512,512,301],"spacing":[0.78,0.78,1.5],"numSlices":301,"huRange":[-1024,3071],
-                 "sourceSeries":{"slices":301,"seriesCount":2}}
-                """.formatted(outputPrefix, outputPrefix);
+                {"inputType":"%2$s","volumeUri":"%1$svolume.nii.gz","thumbnailUri":"%1$sthumb.png","modality":"CT",
+                 "dims":[512,512,301],"spacing":[0.78,0.78,1.5],"spacingAssumed":false,"numSlices":301,
+                 "huRange":[-1024,3071],"sourceSeries":{"slices":301,"seriesCount":2}}
+                """.formatted(outputPrefix, inputType);
     }
 
     /** Simulates the ingest worker writing to {@code imaging.results}. */

@@ -49,14 +49,19 @@ public final class TestFiles {
         return out.toByteArray();
     }
 
+    /** The start of a DICOM Part 10 file: the 128-byte preamble and the {@code DICM} prefix. */
+    public static byte[] dicom() {
+        byte[] dicom = new byte[200];
+        System.arraycopy("DICM".getBytes(StandardCharsets.US_ASCII), 0, dicom, 128, 4);
+        return dicom;
+    }
+
     /** A ZIP archive with one (fake) DICOM file. */
     public static byte[] zip() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(out)) {
             zip.putNextEntry(new ZipEntry("series/IM0001.dcm"));
-            byte[] dicom = new byte[200];
-            System.arraycopy("DICM".getBytes(StandardCharsets.US_ASCII), 0, dicom, 128, 4);
-            zip.write(dicom);
+            zip.write(dicom());
             zip.closeEntry();
         } catch (IOException e) {
             throw new UncheckedIOException(e);

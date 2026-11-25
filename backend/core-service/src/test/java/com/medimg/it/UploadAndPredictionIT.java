@@ -117,7 +117,7 @@ class UploadAndPredictionIT extends IntegrationTest {
         String patientId = createCase(tech);
 
         Response wrongType = post("/uploads/init", tech, Map.of("patientId", patientId,
-                "files", List.of(Map.of("name", "a.dcm", "size", 10, "contentType", "application/dicom"))));
+                "files", List.of(Map.of("name", "a.bmp", "size", 10, "contentType", "image/bmp"))));
         assertThat(wrongType.status()).isEqualTo(400);
 
         Response twoFiles = post("/uploads/init", tech, Map.of("patientId", patientId, "files", List.of(

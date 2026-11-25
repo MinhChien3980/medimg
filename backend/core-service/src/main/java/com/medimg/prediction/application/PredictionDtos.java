@@ -40,6 +40,9 @@ public final class PredictionDtos {
     public record CreatedJob(UUID jobId, String status, long queuePosition) {
     }
 
+    public record JobSummary(UUID jobId, String modelCode, String status) {
+    }
+
     public record CreatePrediction(UUID studyId, UUID seriesId, String modelCode, Map<String, Object> params,
                                    String idempotencyKey) {
     }

@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.medimg.patient.domain.Patient;
+import com.medimg.patient.domain.Sample;
 import com.medimg.patient.infrastructure.PatientRepository;
 import com.medimg.shared.audit.Audited;
 import com.medimg.shared.security.CurrentUser;
@@ -30,6 +31,9 @@ public class PatientService {
     }
 
     public record UpdatePatient(Short birthYear, String sex, String note) {
+    }
+
+    public record MarkSample(String title, String description, String source) {
     }
 
     private final PatientRepository patients;
@@ -86,6 +90,29 @@ public class PatientService {
         require(id).softDelete(clock.instant());
     }
 
+    @Transactional
+    @Audited(action = "SAMPLE_MARKED", resource = "PATIENT")
+    public PatientDto markSample(UUID id, MarkSample cmd) {
+        Patient p = require(id);
+        p.markAsSample(new Sample(cmd.title().trim(), StringUtils.hasText(cmd.description()) ? cmd.description().trim() : null,
+                cmd.source().trim()), clock.instant());
+        return toDto(p, studyCounts.countByPatient(List.of(id)).getOrDefault(id, 0L));
+    }
+
+    @Transactional
+    @Audited(action = "SAMPLE_UNMARKED", resource = "PATIENT")
+    public void unmarkSample(UUID id) {
+        require(id).unmarkAsSample(clock.instant());
+    }
+
+    /** The sample cases, by title. */
+    @Transactional(readOnly = true)
+    public List<PatientDto> listSamples() {
+        List<Patient> samples = patients.findSamples();
+        Map<UUID, Long> counts = studyCounts.countByPatient(samples.stream().map(Patient::getId).toList());
+        return samples.stream().map(p -> toDto(p, counts.getOrDefault(p.getId(), 0L))).toList();
+    }
+
     /** Used by other modules (e.g. imaging) to validate a case reference. */
     @Transactional(readOnly = true)
     public void requireExists(UUID id) {
@@ -120,6 +147,8 @@ public class PatientService {
     }
 
     private static PatientDto toDto(Patient p, long studyCount) {
-        return new PatientDto(p.getId(), p.getCode(), p.getBirthYear(), p.getSex(), p.getNote(), studyCount, p.getCreatedAt());
+        Sample sample = p.getSample();
+        return new PatientDto(p.getId(), p.getCode(), p.getBirthYear(), p.getSex(), p.getNote(), studyCount, p.getCreatedAt(),
+                sample == null ? null : new PatientDto.Sample(sample.title(), sample.description(), sample.source()));
     }
 }

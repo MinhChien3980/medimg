@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.medimg.patient.application.PatientDto;
 import com.medimg.patient.application.PatientService;
 import com.medimg.patient.application.PatientService.CreatePatient;
+import com.medimg.patient.application.PatientService.MarkSample;
 import com.medimg.patient.application.PatientService.UpdatePatient;
 import com.medimg.shared.security.AccessPolicy;
 import com.medimg.shared.web.PageResponse;
@@ -29,6 +30,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -49,6 +51,10 @@ class PatientController {
             @BirthYear Short birthYear,
             @Pattern(regexp = "^[MFO]$", message = "must be M, F or O") String sex,
             @Size(max = 500) String note) {
+    }
+
+    record SampleRequest(@NotBlank @Size(max = 120) String title, @Size(max = 500) String description,
+                         @NotBlank @Size(max = 300) String source) {
     }
 
     private final PatientService service;
@@ -86,6 +92,20 @@ class PatientController {
     @PreAuthorize(AccessPolicy.ADMIN)
     ResponseEntity<Void> delete(@PathVariable UUID id) {
         service.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Makes the case a sample case, shown to every role on the samples page; replaces its sample details if it is one. */
+    @PutMapping("/{id}/sample")
+    @PreAuthorize(AccessPolicy.ADMIN)
+    PatientDto markSample(@PathVariable UUID id, @Valid @RequestBody SampleRequest req) {
+        return service.markSample(id, new MarkSample(req.title(), req.description(), req.source()));
+    }
+
+    @DeleteMapping("/{id}/sample")
+    @PreAuthorize(AccessPolicy.ADMIN)
+    ResponseEntity<Void> unmarkSample(@PathVariable UUID id) {
+        service.unmarkSample(id);
         return ResponseEntity.noContent().build();
     }
 }

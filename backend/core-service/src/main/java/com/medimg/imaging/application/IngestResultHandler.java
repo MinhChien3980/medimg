@@ -65,7 +65,7 @@ public class IngestResultHandler {
     @Transactional
     public void handle(IngestResult r) {
         UploadSession upload = uploads.findById(r.uploadId()).orElse(null);
-        if (upload == null || !upload.isVolume()) {
+        if (upload == null || !upload.isIngested()) {
             log.warn("Ingest result for unknown upload {} ignored", r.uploadId());
             return;
         }
@@ -91,24 +91,27 @@ public class IngestResultHandler {
     }
 
     private void complete(UploadSession upload, String payloadJson, Instant now) {
-        Volume volume;
+        Ingested ingested;
         try {
-            volume = readVolume(upload, payloadJson);
+            ingested = read(upload, payloadJson);
         } catch (JacksonException | IllegalArgumentException e) {
             log.error("Upload {}: unreadable DONE payload: {}", upload.getId(), e.getMessage());
             fail(upload, UNREADABLE_RESULT, false, now);
             return;
         }
-        String modality = volume.payload().modality() == null || volume.payload().modality().isBlank()
-                ? upload.getModalityHint() : volume.payload().modality().trim().toUpperCase(Locale.ROOT);
-        Study study = studies.save(new Study(upload.getReservedStudyId(), upload.getPatientId(), upload.getInputType(),
+        Payload p = ingested.payload();
+        String modality = p.modality() == null || p.modality().isBlank()
+                ? upload.getModalityHint() : p.modality().trim().toUpperCase(Locale.ROOT);
+        Study study = studies.save(new Study(upload.getReservedStudyId(), upload.getPatientId(), p.inputType(),
                 modality, upload.getBodyPartHint(), upload.getCreatedBy(), now));
-        series.save(Series.volume(upload.getReservedSeriesId(), study.getId(), modality, volume.payload().dims(),
-                volume.payload().spacing(), volume.volumeKey(), volume.thumbnailKey(), now));
-        upload.markDone(study.getId(), now);
+        series.save(p.inputType().isVolume()
+                ? Series.volume(upload.getReservedSeriesId(), study.getId(), modality, p.dims(), p.spacing(),
+                        Boolean.TRUE.equals(p.spacingAssumed()), ingested.imageKey(), ingested.thumbnailKey(), now)
+                : new Series(upload.getReservedSeriesId(), study.getId(), modality, 1, p.dims().get(1), p.dims().get(0),
+                        ingested.imageKey(), ingested.thumbnailKey(), now));
+        upload.markIngested(p.inputType(), now);
         rawUploads.deleteAfterCommit(rawKey(upload));
-        log.info("Upload {} ingested into study {} ({} {})", upload.getId(), study.getId(), upload.getInputType(),
-                volume.payload().dims());
+        log.info("Upload {} ingested into study {} ({} {})", upload.getId(), study.getId(), p.inputType(), p.dims());
     }
 
     /**
@@ -130,24 +133,37 @@ public class IngestResultHandler {
         }
     }
 
-    private record Volume(Payload payload, String volumeKey, String thumbnailKey) {
+    /** {@code imageKey} is the normalised image (2D) or volume (3D). */
+    private record Ingested(Payload payload, String imageKey, String thumbnailKey) {
     }
 
-    /** The payload must describe a 3D volume stored where the worker was told to write it. */
-    private Volume readVolume(UploadSession upload, String payloadJson) {
+    /**
+     * The payload must describe what the input can become (a 2D image or a 3D volume), stored where the worker was
+     * told to write it.
+     */
+    private Ingested read(UploadSession upload, String payloadJson) {
         if (payloadJson == null) {
             throw new IllegalArgumentException("DONE without payload");
         }
         Payload p = json.readValue(payloadJson, Payload.class);
+        if (p.inputType() == null || !upload.getIngestInput().canBecome(p.inputType())) {
+            throw new IllegalArgumentException(upload.getIngestInput() + " input cannot become " + p.inputType());
+        }
         requireTriple("dims", p.dims(), d -> d > 0);
+        if (!p.inputType().isVolume()) {
+            if (p.dims().get(2) != 1) {
+                throw new IllegalArgumentException("dims of a 2D image must be [w, h, 1]: " + p.dims());
+            }
+            return new Ingested(p, ownKey(upload, p.imageUri()), ownKey(upload, p.thumbnailUri()));
+        }
         requireTriple("spacing", p.spacing(), s -> s > 0 && Double.isFinite(s));
-        return new Volume(p, ownKey(upload, p.volumeUri()), ownKey(upload, p.thumbnailUri()));
+        return new Ingested(p, ownKey(upload, p.volumeUri()), ownKey(upload, p.thumbnailUri()));
     }
 
     private String ownKey(UploadSession upload, String uri) {
         String key = storage.keyOf(uri);
-        if (!key.startsWith(upload.volumePrefix())) {
-            throw new IllegalArgumentException(uri + " is outside " + upload.volumePrefix());
+        if (!key.startsWith(upload.outputPrefix())) {
+            throw new IllegalArgumentException(uri + " is outside " + upload.outputPrefix());
         }
         return key;
     }

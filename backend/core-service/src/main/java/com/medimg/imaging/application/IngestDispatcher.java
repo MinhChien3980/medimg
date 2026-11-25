@@ -2,6 +2,7 @@ package com.medimg.imaging.application;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -13,7 +14,12 @@ import com.medimg.imaging.domain.UploadSession;
 import com.medimg.shared.outbox.Outbox;
 import com.medimg.shared.storage.ObjectStoragePort;
 
-/** Hands one attempt of a volume upload to the ingest worker, through the outbox ({@code imaging.jobs}). */
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * Hands one attempt of an upload to the ingest worker, through the outbox ({@code imaging.jobs}). {@code sliceSpacingMm}
+ * is the requested voxel spacing as a JSON array, or empty.
+ */
 @Component
 public class IngestDispatcher {
 
@@ -22,10 +28,12 @@ public class IngestDispatcher {
 
     private final Outbox outbox;
     private final ObjectStoragePort storage;
+    private final ObjectMapper json;
 
-    IngestDispatcher(Outbox outbox, ObjectStoragePort storage) {
+    IngestDispatcher(Outbox outbox, ObjectStoragePort storage, ObjectMapper json) {
         this.outbox = outbox;
         this.storage = storage;
+        this.json = json;
     }
 
     /** Schedules the upload's current attempt for publication at {@code availableAt}. */
@@ -34,11 +42,13 @@ public class IngestDispatcher {
         Map<String, String> fields = new LinkedHashMap<>();
         fields.put("uploadId", upload.getId().toString());
         fields.put("attempt", Integer.toString(upload.getAttempt()));
-        fields.put("inputType", upload.getInputType().name());
+        fields.put("inputType", upload.getIngestInput().name());
         fields.put("inputUri", storage.uri(upload.getFiles().getFirst().getStorageKey()));
-        fields.put("outputPrefix", storage.uri(upload.volumePrefix()));
+        fields.put("outputPrefix", storage.uri(upload.outputPrefix()));
         fields.put("modalityHint", nullToEmpty(upload.getModalityHint()));
         fields.put("bodyPartHint", nullToEmpty(upload.getBodyPartHint()));
+        List<Double> spacing = upload.requestedSpacing();
+        fields.put("sliceSpacingMm", spacing == null ? "" : json.writeValueAsString(spacing));
         outbox.enqueue(MESSAGE_TYPE, upload.getId(), fields, availableAt);
     }
 

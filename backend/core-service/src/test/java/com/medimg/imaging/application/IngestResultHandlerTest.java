@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import com.medimg.imaging.application.IngestResult.Type;
+import com.medimg.imaging.domain.IngestInput;
 import com.medimg.imaging.domain.Series;
 import com.medimg.imaging.domain.Study;
 import com.medimg.imaging.domain.Study.InputType;
@@ -49,7 +50,7 @@ class IngestResultHandlerTest {
     private final ObjectStoragePort storage = mock(ObjectStoragePort.class);
     private final ImagingProperties props = new ImagingProperties(50_000_000, 256, Duration.ofMinutes(10),
             new ImagingProperties.Volume(500_000_000, Duration.ofMinutes(30), 3,
-                    List.of(Duration.ofSeconds(30), Duration.ofMinutes(2))));
+                    List.of(Duration.ofSeconds(30), Duration.ofMinutes(2))), null);
     private final IngestResultHandler handler = new IngestResultHandler(uploads, studies, series, dispatcher, patients,
             rawUploads, storage, props, JsonMapper.builder().build(), Clock.fixed(NOW, ZoneOffset.UTC));
 
@@ -59,7 +60,7 @@ class IngestResultHandlerTest {
 
     IngestResultHandlerTest() {
         rawKey = upload.addFile("ct.zip", 100, "application/zip").getStorageKey();
-        upload.markUploadedForIngest(InputType.DICOM_SERIES, NOW.minusSeconds(60));
+        upload.markUploadedForIngest(IngestInput.ZIP, NOW.minusSeconds(60));
         when(uploads.findById(upload.getId())).thenReturn(Optional.of(upload));
         when(patients.exists(upload.getPatientId())).thenReturn(true);
         when(storage.keyOf(anyString())).thenAnswer(i -> i.<String>getArgument(0).substring("s3://medimg/".length()));
@@ -69,7 +70,7 @@ class IngestResultHandlerTest {
     @Test
     void doneCreatesTheStudyAndSeriesUnderTheReservedIds() {
         handler.handle(result(1, Type.STARTED, null, null, false));
-        handler.handle(result(1, Type.DONE, payload(upload.volumePrefix(), "\"ct\""), null, false));
+        handler.handle(result(1, Type.DONE, payload(upload.outputPrefix(), "\"ct\""), null, false));
 
         ArgumentCaptor<Study> study = ArgumentCaptor.forClass(Study.class);
         verify(studies).save(study.capture());
@@ -82,21 +83,91 @@ class IngestResultHandlerTest {
         verify(series).save(saved.capture());
         Series s = saved.getValue();
         assertThat(s.getId()).isEqualTo(upload.getReservedSeriesId());
-        assertThat(s.getImageKey()).isEqualTo(upload.volumePrefix() + "volume.nii.gz");
-        assertThat(s.getThumbnailKey()).isEqualTo(upload.volumePrefix() + "thumb.png");
+        assertThat(s.getImageKey()).isEqualTo(upload.outputPrefix() + "volume.nii.gz");
+        assertThat(s.getThumbnailKey()).isEqualTo(upload.outputPrefix() + "thumb.png");
         assertThat(s.dims()).containsExactly(512, 400, 120);
         assertThat(s.getCols()).isEqualTo(512);
         assertThat(s.getRows()).isEqualTo(400);
         assertThat(s.getNumImages()).isEqualTo(120);
         assertThat(s.spacing()).containsExactly(0.7, 0.7, 2.5);
+        assertThat(s.isSpacingAssumed()).isFalse();
         assertThat(upload.getStatus()).isEqualTo(Status.DONE);
+        assertThat(upload.getInputType()).isEqualTo(InputType.DICOM_SERIES);
         assertThat(upload.getStudyId()).isEqualTo(upload.getReservedStudyId());
         verify(rawUploads).deleteAfterCommit(rawKey);
     }
 
     @Test
+    void stackOfImagesKeepsWhetherItsSpacingWasAssumed() {
+        handler.handle(result(1, Type.DONE, payload(upload.outputPrefix(), "\"OT\"")
+                .replace("DICOM_SERIES", "IMAGE_STACK").replace("\"numSlices\"", "\"spacingAssumed\":true,\"numSlices\""),
+                null, false));
+
+        ArgumentCaptor<Study> study = ArgumentCaptor.forClass(Study.class);
+        verify(studies).save(study.capture());
+        assertThat(study.getValue().getInputType()).isEqualTo(InputType.IMAGE_STACK);
+        assertThat(study.getValue().getModality()).isEqualTo("OT");
+        ArgumentCaptor<Series> saved = ArgumentCaptor.forClass(Series.class);
+        verify(series).save(saved.capture());
+        assertThat(saved.getValue().isSpacingAssumed()).isTrue();
+        assertThat(upload.getInputType()).isEqualTo(InputType.IMAGE_STACK);
+    }
+
+    @Test
+    void dicomImageBecomesA2dStudy() {
+        UploadSession xray = dicomUpload();
+
+        handler.handle(new IngestResult(xray.getId(), 1, "w1", Type.DONE, 0, imagePayload(xray, "[2000,2500,1]"), null, false));
+
+        ArgumentCaptor<Study> study = ArgumentCaptor.forClass(Study.class);
+        verify(studies).save(study.capture());
+        assertThat(study.getValue().getId()).isEqualTo(xray.getReservedStudyId());
+        assertThat(study.getValue().getInputType()).isEqualTo(InputType.DICOM_2D);
+        assertThat(study.getValue().getModality()).isEqualTo("DX");
+        ArgumentCaptor<Series> saved = ArgumentCaptor.forClass(Series.class);
+        verify(series).save(saved.capture());
+        Series s = saved.getValue();
+        assertThat(s.getImageKey()).isEqualTo(xray.outputPrefix() + "image.png");
+        assertThat(s.getThumbnailKey()).isEqualTo(xray.outputPrefix() + "thumb.png");
+        assertThat(s.getCols()).isEqualTo(2000);
+        assertThat(s.getRows()).isEqualTo(2500);
+        assertThat(s.getNumImages()).isEqualTo(1);
+        assertThat(s.spacing()).isNull();
+        assertThat(xray.getStatus()).isEqualTo(Status.DONE);
+    }
+
+    @Test
+    void resultThatTheInputCannotBecomeIsUnreadable() {
+        UploadSession xray = dicomUpload();
+
+        handler.handle(new IngestResult(xray.getId(), 1, "w1", Type.DONE, 0,
+                payload(xray.outputPrefix(), "\"CT\""), null, false));
+        handler.handle(result(1, Type.DONE, payload(upload.outputPrefix(), "\"CT\"").replace("\"DICOM_SERIES\"", "null"),
+                null, false));
+
+        assertThat(xray.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        assertThat(upload.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        verifyNoInteractions(studies, series);
+    }
+
+    @Test
+    void image2dMustBeASingleSliceStoredUnderTheOutputPrefix() {
+        UploadSession deep = dicomUpload();
+        UploadSession elsewhere = dicomUpload();
+
+        handler.handle(new IngestResult(deep.getId(), 1, "w1", Type.DONE, 0, imagePayload(deep, "[512,512,2]"), null, false));
+        handler.handle(new IngestResult(elsewhere.getId(), 1, "w1", Type.DONE, 0,
+                imagePayload(elsewhere, "[512,512,1]").replace("%simage.png".formatted(elsewhere.outputPrefix()),
+                        "studies/other/image.png"), null, false));
+
+        assertThat(deep.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        assertThat(elsewhere.getError()).isEqualTo(IngestResultHandler.UNREADABLE_RESULT);
+        verifyNoInteractions(studies, series);
+    }
+
+    @Test
     void modalityFallsBackToTheHint() {
-        handler.handle(result(1, Type.DONE, payload(upload.volumePrefix(), "null"), null, false));
+        handler.handle(result(1, Type.DONE, payload(upload.outputPrefix(), "null"), null, false));
 
         ArgumentCaptor<Study> study = ArgumentCaptor.forClass(Study.class);
         verify(studies).save(study.capture());
@@ -153,7 +224,7 @@ class IngestResultHandlerTest {
         assertThat(upload.getProgress()).isZero();
 
         handler.handle(result(1, Type.FAILED, null, "bad data", false));
-        handler.handle(result(1, Type.DONE, payload(upload.volumePrefix(), "\"CT\""), null, false));
+        handler.handle(result(1, Type.DONE, payload(upload.outputPrefix(), "\"CT\""), null, false));
         handler.handle(result(0, Type.FAILED, null, "unreadable", false));
 
         assertThat(upload.getStatus()).isEqualTo(Status.FAILED);
@@ -175,12 +246,14 @@ class IngestResultHandlerTest {
 
     @Test
     void unreadableDonePayloadFailsTheUploadForGood() {
-        assertUnreadable(u -> payload("studies/" + UUID.randomUUID() + "/series/" + UUID.randomUUID() + "/", "\"CT\""));
+        assertUnreadable(u -> niftiPayload(u).replace(u.outputPrefix(),
+                "studies/" + UUID.randomUUID() + "/series/" + UUID.randomUUID() + "/"));
         assertUnreadable(u -> """
-                {"volumeUri":"s3://medimg/%1$svolume.nii.gz","thumbnailUri":"s3://medimg/%1$sthumb.png",
-                 "dims":[512,512],"spacing":[1,1,1]}
-                """.formatted(u.volumePrefix()));
-        assertUnreadable(u -> payload(u.volumePrefix(), "\"CT\"").replace("0.7,0.7,2.5", "0.7,0,2.5"));
+                {"inputType":"NIFTI","volumeUri":"s3://medimg/%1$svolume.nii.gz",
+                 "thumbnailUri":"s3://medimg/%1$sthumb.png","dims":[512,512],"spacing":[1,1,1]}
+                """.formatted(u.outputPrefix()));
+        assertUnreadable(u -> niftiPayload(u).replace("0.7,0.7,2.5", "0.7,0,2.5"));
+        assertUnreadable(u -> niftiPayload(u).replace("\"NIFTI\"", "\"VOXELS\""));
         assertUnreadable(u -> "{not json");
         assertUnreadable(u -> null);
         verifyNoInteractions(studies, series);
@@ -201,7 +274,7 @@ class IngestResultHandlerTest {
     private void assertUnreadable(Function<UploadSession, String> payload) {
         UploadSession u = new UploadSession(UUID.randomUUID(), "CT", null, UUID.randomUUID(), NOW);
         u.addFile("ct.nii", 10, "application/octet-stream");
-        u.markUploadedForIngest(InputType.NIFTI, NOW);
+        u.markUploadedForIngest(IngestInput.NIFTI, NOW);
         when(uploads.findById(u.getId())).thenReturn(Optional.of(u));
 
         handler.handle(new IngestResult(u.getId(), 1, "w1", Type.DONE, 0, payload.apply(u), null, false));
@@ -214,10 +287,30 @@ class IngestResultHandlerTest {
         return new IngestResult(upload.getId(), attempt, "w1", type, 0, payload, error, retryable);
     }
 
+    private UploadSession dicomUpload() {
+        UploadSession u = new UploadSession(UUID.randomUUID(), "CR", "CHEST", UUID.randomUUID(), NOW);
+        u.addFile("cxr.dcm", 10, "application/dicom");
+        u.markUploadedForIngest(IngestInput.DICOM_2D, NOW);
+        when(uploads.findById(u.getId())).thenReturn(Optional.of(u));
+        return u;
+    }
+
     private static String payload(String prefix, String modalityJson) {
         return """
-                {"volumeUri":"s3://medimg/%1$svolume.nii.gz","thumbnailUri":"s3://medimg/%1$sthumb.png",
-                 "modality":%2$s,"dims":[512,400,120],"spacing":[0.7,0.7,2.5],"numSlices":120}
+                {"inputType":"DICOM_SERIES","volumeUri":"s3://medimg/%1$svolume.nii.gz",
+                 "thumbnailUri":"s3://medimg/%1$sthumb.png","modality":%2$s,"dims":[512,400,120],
+                 "spacing":[0.7,0.7,2.5],"numSlices":120}
                 """.formatted(prefix, modalityJson);
+    }
+
+    private static String niftiPayload(UploadSession u) {
+        return payload(u.outputPrefix(), "\"CT\"").replace("DICOM_SERIES", "NIFTI");
+    }
+
+    private static String imagePayload(UploadSession u, String dims) {
+        return """
+                {"inputType":"DICOM_2D","imageUri":"s3://medimg/%1$simage.png","thumbnailUri":"s3://medimg/%1$sthumb.png",
+                 "modality":"DX","dims":%2$s,"spacing":[0.14,0.14,null]}
+                """.formatted(u.outputPrefix(), dims);
     }
 }
