@@ -64,7 +64,8 @@ export async function upload(
   await page.getByRole('button', { name: 'Next' }).click();
   await page.locator('input[type=file]').setInputFiles(file);
   await expect(page.getByTestId('picked-file')).toContainText(file.name);
-  await page.getByRole('button', { name: 'Upload', exact: true }).click();
+  // The accessible name includes the icon's ("cloud-upload Upload").
+  await page.getByRole('button', { name: 'Upload' }).click();
   await expect(page.getByText(ready, { exact: true })).toBeVisible({ timeout: 240_000 });
 }
 

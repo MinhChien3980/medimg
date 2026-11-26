@@ -18,6 +18,8 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: 'playwright-report/e2e-stack', open: 'never' }]],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:8088',
+    // A click or fill that cannot happen fails fast; long waits (AI jobs) set their own timeout.
+    actionTimeout: 30_000,
     viewport: { width: 1600, height: 900 },
     locale: 'en-US',
     trace: 'retain-on-failure',
