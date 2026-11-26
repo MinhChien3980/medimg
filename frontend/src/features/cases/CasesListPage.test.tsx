@@ -31,3 +31,24 @@ describe('CasesListPage when empty', () => {
     expect(screen.queryByRole('link', { name: /Try a sample case/ })).not.toBeInTheDocument();
   });
 });
+
+describe('CasesListPage search', () => {
+  it('sends at most 100 characters of search text, the server limit', async () => {
+    useAuthStore.getState().setSession(tokens('acc', 'ref'));
+    const sent: (string | null)[] = [];
+    server.use(
+      mock.get(`${API}/patients`, ({ request }) => {
+        sent.push(new URL(request.url).searchParams.get('q'));
+        return HttpResponse.json(emptyPage);
+      }),
+    );
+    renderWithProviders(<CasesListPage />, {
+      route: `/cases?q=${'a'.repeat(150)}`,
+      path: '/cases',
+    });
+
+    expect(await screen.findByText('No cases match the search')).toBeInTheDocument();
+    expect(sent.at(-1)).toBe('a'.repeat(100));
+    expect(screen.getByRole('searchbox')).toHaveAttribute('maxlength', '100');
+  });
+});

@@ -15,6 +15,9 @@ import { NewCaseModal } from './NewCaseModal';
 
 const DEFAULT_PAGE_SIZE = 10;
 
+/** The longest search text the server accepts (GET /patients?q=). */
+const SEARCH_MAX = 100;
+
 function positiveInt(value: string | null, fallback: number): number {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : fallback;
@@ -29,7 +32,7 @@ export default function CasesListPage() {
   const [creating, setCreating] = useState(false);
 
   // URL is the source of truth so back/forward and reload keep the search + page.
-  const q = params.get('q') ?? '';
+  const q = (params.get('q') ?? '').slice(0, SEARCH_MAX);
   const page = positiveInt(params.get('page'), 1);
   const size = positiveInt(params.get('size'), DEFAULT_PAGE_SIZE);
   const query = { q, page: page - 1, size };
@@ -101,6 +104,7 @@ export default function CasesListPage() {
           <Input.Search
             allowClear
             defaultValue={q}
+            maxLength={SEARCH_MAX}
             placeholder={t('cases.searchPlaceholder')}
             onSearch={(value) => update({ q: value.trim(), page: undefined })}
             style={{ width: 300 }}
