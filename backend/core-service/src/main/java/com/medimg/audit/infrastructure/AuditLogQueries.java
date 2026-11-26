@@ -6,7 +6,6 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -20,6 +19,7 @@ import org.springframework.stereotype.Repository;
 
 import com.medimg.audit.domain.AuditFilter;
 import com.medimg.audit.domain.AuditRange;
+import com.medimg.shared.persistence.LikePatterns;
 
 /**
  * Reads the audit log. Every query is bounded by the time range on {@code occurred_at}, the partition key, so that
@@ -104,8 +104,7 @@ public class AuditLogQueries {
                 .addValue("from", OffsetDateTime.ofInstant(range.from(), ZoneOffset.UTC))
                 .addValue("to", OffsetDateTime.ofInstant(range.to(), ZoneOffset.UTC))
                 .addValue("userId", f.userId())
-                .addValue("username", f.username() == null ? null : "%" + f.username().toLowerCase(Locale.ROOT)
-                        .replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%")
+                .addValue("username", LikePatterns.contains(f.username()))
                 .addValue("action", f.action())
                 .addValue("entityType", f.entityType())
                 .addValue("entityId", f.entityId())

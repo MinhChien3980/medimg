@@ -33,6 +33,7 @@ import com.medimg.identity.infrastructure.AppUserRepository;
 import com.medimg.identity.infrastructure.RefreshTokenRepository;
 import com.medimg.shared.audit.AuditEvent.Outcome;
 import com.medimg.shared.audit.AuditEvents;
+import com.medimg.shared.persistence.LikePatterns;
 import com.medimg.shared.security.CurrentUser;
 import com.medimg.shared.web.ApiException;
 import com.medimg.shared.web.ExpectedVersion;
@@ -68,7 +69,7 @@ public class UserAdminService {
     /** {@code q} matches part of the username, full name or e-mail, ignoring case; LIKE wildcards in it are literal. */
     @Transactional(readOnly = true)
     public PageResponse<AdminUserDto> search(UserFilter filter, Pageable pageable) {
-        return PageResponse.of(users.search(likePattern(filter.q()),
+        return PageResponse.of(users.search(LikePatterns.contains(filter.q()),
                 filter.status() == null ? null : filter.status().name(),
                 filter.role() == null ? null : filter.role().name(), pageable), AdminUserDto::from);
     }
@@ -218,14 +219,6 @@ public class UserAdminService {
 
     private AppUser require(UUID id) {
         return users.findById(id).orElseThrow(() -> ApiException.notFound("User", id));
-    }
-
-    static String likePattern(String q) {
-        String text = q == null ? "" : q.trim().toLowerCase(Locale.ROOT);
-        if (text.isEmpty()) {
-            return null;
-        }
-        return "%" + text.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
 
     private static ApiException usernameTaken(String username) {

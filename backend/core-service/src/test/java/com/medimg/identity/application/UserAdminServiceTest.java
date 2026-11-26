@@ -297,14 +297,4 @@ class UserAdminServiceTest {
                 .satisfies(e -> assertProblem(e, HttpStatus.UNPROCESSABLE_CONTENT, "self-reset"));
         verify(tokens, never()).revokeAllForUser(eq(actor.getId()), any(), any());
     }
-
-    // --- search ------------------------------------------------------------------------------------------------------
-
-    @Test
-    void searchTextIsALiteralCaseInsensitiveSubstring() {
-        assertThat(UserAdminService.likePattern(null)).isNull();
-        assertThat(UserAdminService.likePattern("   ")).isNull();
-        assertThat(UserAdminService.likePattern(" DoC ")).isEqualTo("%doc%");
-        assertThat(UserAdminService.likePattern("50%_a!b")).isEqualTo("%50!%!_a!!b%");
-    }
 }
