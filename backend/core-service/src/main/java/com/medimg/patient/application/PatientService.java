@@ -17,6 +17,7 @@ import com.medimg.patient.domain.Patient;
 import com.medimg.patient.domain.Sample;
 import com.medimg.patient.infrastructure.PatientRepository;
 import com.medimg.shared.audit.Audited;
+import com.medimg.shared.persistence.LikePatterns;
 import com.medimg.shared.security.CurrentUser;
 import com.medimg.shared.web.ApiException;
 import com.medimg.shared.web.PageResponse;
@@ -52,7 +53,8 @@ public class PatientService {
 
     @Transactional(readOnly = true)
     public PageResponse<PatientDto> search(String q, Pageable pageable) {
-        Page<Patient> page = patients.search(StringUtils.hasText(q) ? q.trim() : "", pageable);
+        String pattern = LikePatterns.contains(q);
+        Page<Patient> page = pattern == null ? patients.findLive(pageable) : patients.search(pattern, pageable);
         Map<UUID, Long> counts = studyCounts.countByPatient(page.map(Patient::getId).getContent());
         return PageResponse.of(page, p -> toDto(p, counts.getOrDefault(p.getId(), 0L)));
     }
