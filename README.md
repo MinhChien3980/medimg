@@ -14,7 +14,8 @@ report. Ready-made sample cases let anyone try it without data of their own.
 | 2a | CT upload (NIfTI, DICOM series ZIP) → ingest to a normalised volume → MPR viewer (Cornerstone3D) → TotalSegmentator organ segmentation on CPU → labelmap overlay + 3D organ meshes (three.js) with volumes | ✅ done |
 | 2b | DICOM X-ray input, ZIPs of PNG/JPEG slices, multipart upload for files over 64 MB, sample-case gallery | ✅ done |
 | 3 | Finding review (accept / edit / reject, manual findings), annotations and measurements on X-ray and CT, signed PDF reports with key images and amendments | ✅ done |
-| 4 | Dashboard, admin, audit UI, E2E tests, cloud deploy | planned |
+| 4a | Dashboard for every role, user administration (lock, password reset, forced change), model enable/disable, audit log search and CSV export | ✅ done |
+| 4b | End-to-end tests on the Docker stack in CI, cloud deploy | planned |
 
 ## Architecture
 
@@ -64,6 +65,7 @@ ingest-worker (same image, WORKER_ROLE=ingest) ◄── imaging.jobs / imaging.
 | Idempotency key | Retrying `POST /predictions` with the same `Idempotency-Key` returns the original job, also under concurrent requests | [`PredictionService`](backend/core-service/src/main/java/com/medimg/prediction/application/PredictionService.java) |
 | Strategy + registry for models | Adding a model means adding one pipeline class; the consumer does not change | [`registry.py`](ai/inference/worker/pipelines/registry.py) |
 | Rotating refresh tokens with reuse detection | Each refresh token works once; presenting a used one revokes all of the user's sessions | [`AuthService`](backend/core-service/src/main/java/com/medimg/identity/application/AuthService.java) |
+| Account state checked on every request | Locking an account or resetting its password ends its sessions at the next request, not when the 15-minute access token expires; a temporary password blocks every API except the password change | [`AccountAccessInterceptor`](backend/core-service/src/main/java/com/medimg/identity/api/AccountAccessInterceptor.java), [`UserAdminService`](backend/core-service/src/main/java/com/medimg/identity/application/UserAdminService.java) |
 | Role-based access in one place | Read, write and admin policies are named once on the server and mirrored by one helper in the UI | [`AccessPolicy`](backend/core-service/src/main/java/com/medimg/shared/security/AccessPolicy.java), [`permissions.ts`](frontend/src/features/auth/permissions.ts) |
 | Append-only audit log | Written asynchronously from domain events; the application's database role has no UPDATE or DELETE on it | [`AuditWriter`](backend/core-service/src/main/java/com/medimg/audit/application/AuditWriter.java), [`V3__audit.sql`](backend/core-service/src/main/resources/db/migration/V3__audit.sql) |
 | Multipart upload through presigned part URLs | Large CTs never pass through the API, each part URL signs its exact byte length, ETags are checked on completion, and abandoned uploads are aborted | [`UploadService`](backend/core-service/src/main/java/com/medimg/imaging/application/UploadService.java), [`multipartUpload.ts`](frontend/src/api/multipartUpload.ts) |
@@ -186,7 +188,7 @@ Demo accounts, all with the password `Demo@12345`:
 | --- | --- |
 | `doctor` | everything clinical: cases, uploads, AI runs, review findings, annotate, write and sign reports |
 | `tech` | cases, uploads, AI runs, own annotations; reads draft reports |
-| `admin` | cases, uploads, AI runs, delete cases, manage sample cases; reads draft reports |
+| `admin` | cases, uploads, AI runs, delete cases, manage sample cases; administers users and AI models, reads the audit log; reads draft reports |
 | `researcher` | read-only: cases, images, AI results, annotations and signed reports |
 
 Lesion boxes come from doctors' annotations: the planned box-detection model for chest X-rays (`cxr-detect`) is not
@@ -210,6 +212,22 @@ All commands run from the repository root.
 
 On pull requests CI runs only the jobs whose directory changed, and the ai-worker job skips the real-model tests.
 Pushes to `main` run every job, including the real-model tests.
+
+## Administration and security
+
+- The dashboard is the landing page for every role. It shows totals only: no patient data. Days are counted in the
+  zone set by `APP_ZONE` (default `Asia/Ho_Chi_Minh`).
+- Admins create users and reset passwords. Both give a temporary password, shown once, that must be changed at the
+  next sign-in.
+- Passwords need at least 10 characters (at most 72 bytes), a letter and a digit, must not contain the username, and
+  must differ from the current one.
+- Users are never deleted, only locked. A locked account gets the same answer as wrong credentials, and its open
+  sessions end at their next request.
+- An admin cannot lock, demote or reset their own account, and the last active admin can be neither locked nor
+  demoted.
+- A disabled AI model takes no new jobs and no manual retries; jobs already queued or running finish.
+- The audit log can be searched over at most 93 days. The CSV export is limited to 100 000 rows (larger exports are
+  refused), neutralises spreadsheet formulas, and is itself audited.
 
 ## Data and licences
 
