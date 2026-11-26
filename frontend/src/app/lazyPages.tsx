@@ -5,6 +5,9 @@ import { RequirePermission } from '@/features/auth/RequirePermission';
 
 // Heavy / later-slice screens are code-split. The viewer will grow (Cornerstone3D, three.js).
 const UploadWizardPage = lazy(() => import('@/features/upload/UploadWizardPage'));
+// The landing page, but its period picker and tables stay out of the shell (Recharts is a
+// further lazy chunk inside it).
+const DashboardPage = lazy(() => import('@/features/dashboard/DashboardPage'));
 const ViewerPage = lazy(() => import('@/features/viewer/ViewerPage'));
 const ReportPage = lazy(() => import('@/features/reports/ReportPage'));
 // Administration (admins only): its chunks are only fetched once the permission check passed.
@@ -24,6 +27,14 @@ function Lazy({ children }: { children: ReactNode }) {
     >
       {children}
     </Suspense>
+  );
+}
+
+export function DashboardRoute() {
+  return (
+    <Lazy>
+      <DashboardPage />
+    </Lazy>
   );
 }
 

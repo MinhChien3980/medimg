@@ -5,7 +5,6 @@ import { RequirePermission } from '@/features/auth/RequirePermission';
 import LoginPage from '@/features/auth/LoginPage';
 import CaseDetailPage from '@/features/cases/CaseDetailPage';
 import CasesListPage from '@/features/cases/CasesListPage';
-import DashboardPage from '@/features/dashboard/DashboardPage';
 import AppLayout from '@/features/layout/AppLayout';
 import SamplesPage from '@/features/samples/SamplesPage';
 import NotFoundPage from '@/shared/components/NotFoundPage';
@@ -14,6 +13,7 @@ import {
   AdminAuditRoute,
   AdminModelsRoute,
   AdminUsersRoute,
+  DashboardRoute,
   ReportRoute,
   UploadWizardRoute,
   ViewerRoute,
@@ -32,7 +32,7 @@ export const routes: RouteObject[] = [
     children: [
       // The dashboard is the landing page of every role.
       { index: true, element: <Navigate to="/dashboard" replace /> },
-      { path: 'dashboard', element: <DashboardPage /> },
+      { path: 'dashboard', element: <DashboardRoute /> },
       { path: 'account/password', element: <ChangePasswordPage /> },
       { path: 'cases', element: <CasesListPage /> },
       { path: 'cases/:caseId', element: <CaseDetailPage /> },
