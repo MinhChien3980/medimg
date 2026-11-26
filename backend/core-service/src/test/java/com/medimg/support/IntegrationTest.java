@@ -155,6 +155,49 @@ public abstract class IntegrationTest {
         return r.body().get("accessToken").asString();
     }
 
+    /** Password the helpers below give the accounts they create, once the temporary one is changed. */
+    protected static final String OWN_PASSWORD = "Own-password-2026";
+
+    /** A tokens pair and the user, as returned by login. */
+    protected record Session(String accessToken, String refreshToken, JsonNode user) {
+    }
+
+    protected Session session(String username, String password) {
+        Response r = post("/auth/login", null, Map.of("username", username, "password", password));
+        if (r.status() != 200) {
+            throw new IllegalStateException("login failed: " + r);
+        }
+        return new Session(r.body().get("accessToken").asString(), r.body().get("refreshToken").asString(),
+                r.body().get("user"));
+    }
+
+    /** A username no other test uses. */
+    protected static String uniqueUsername(String prefix) {
+        return prefix + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    /** Creates an account as the demo admin; returns the response body {user, temporaryPassword}. */
+    protected JsonNode createUser(String username, String... roles) {
+        Response r = post("/admin/users", login("admin"),
+                Map.of("username", username, "fullName", "Test " + username, "roles", List.of(roles)));
+        if (r.status() != 201) {
+            throw new IllegalStateException("create user failed: " + r);
+        }
+        return r.body();
+    }
+
+    /** Creates an account and sets its own password ({@link #OWN_PASSWORD}); returns a session of it. */
+    protected Session createActiveUser(String username, String... roles) {
+        String temporary = createUser(username, roles).get("temporaryPassword").asString();
+        Session first = session(username, temporary);
+        Response changed = post("/me/password", first.accessToken(),
+                Map.of("currentPassword", temporary, "newPassword", OWN_PASSWORD));
+        if (changed.status() != 204) {
+            throw new IllegalStateException("password change failed: " + changed);
+        }
+        return session(username, OWN_PASSWORD);
+    }
+
     protected String createCase(String token) {
         return post("/patients", token, Map.of()).body().get("id").asString();
     }
