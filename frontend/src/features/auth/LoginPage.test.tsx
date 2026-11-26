@@ -67,6 +67,21 @@ describe('LoginPage', () => {
     expect(screen.getByText('Your session has expired, please sign in again.')).toBeInTheDocument();
   });
 
+  it('says the session was ended when the server revoked it (account locked)', () => {
+    useAuthStore.getState().setSession(tokens('acc', 'ref'));
+    useAuthStore.getState().revoke();
+
+    renderWithProviders(<LoginPage />, { route: '/login' });
+    expect(
+      screen.getByText(
+        'Your session was ended. Sign in again; if that fails, contact an administrator.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Your session has expired, please sign in again.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('shows the ProblemDetail `detail` on failure', async () => {
     const user = userEvent.setup();
     server.use(

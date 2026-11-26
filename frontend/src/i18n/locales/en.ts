@@ -53,6 +53,8 @@ export const en: Messages = {
     demoHint: 'Click to fill in. Shared password: {{password}}',
     loginFailed: 'Sign-in failed',
     sessionExpired: 'Your session has expired, please sign in again.',
+    sessionRevoked:
+      'Your session was ended. Sign in again; if that fails, contact an administrator.',
     features: {
       upload:
         'Upload X-rays (PNG/JPG, DICOM) or 3D scans (NIfTI, DICOM, image stacks) and manage cases',

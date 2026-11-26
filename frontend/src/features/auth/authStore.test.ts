@@ -93,4 +93,25 @@ describe('authStore', () => {
     s = useAuthStore.getState();
     expect(s.passwordChangedSignIn).toBe(false);
   });
+
+  it('revoke() ends a session the server ended, and tells the login page why', () => {
+    useAuthStore.getState().setSession(tokens('a', 'r'));
+    useAuthStore.getState().revoke();
+    let s = useAuthStore.getState();
+    expect(s.user).toBeNull();
+    expect(s.accessToken).toBeNull();
+    expect(s.refreshToken).toBeNull();
+    expect(s.sessionRevoked).toBe(true);
+    expect(s.sessionExpired).toBe(false);
+    expect(s.passwordChangedSignIn).toBe(false);
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).not.toContain('sessionRevoked');
+
+    useAuthStore.getState().setSession(tokens('b', 'r2'));
+    s = useAuthStore.getState();
+    expect(s.sessionRevoked).toBe(false);
+
+    useAuthStore.getState().revoke();
+    useAuthStore.getState().expire();
+    expect(useAuthStore.getState().sessionRevoked).toBe(false);
+  });
 });

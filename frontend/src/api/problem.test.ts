@@ -4,6 +4,7 @@ import {
   errorMessage,
   hasProblemType,
   isPasswordChangeRequired,
+  isSessionRevoked,
   parseBlobBody,
   toAppError,
 } from './problem';
@@ -119,6 +120,22 @@ describe('isPasswordChangeRequired', () => {
     expect(isPasswordChangeRequired(403, { title: 'Forbidden' })).toBe(false);
     expect(isPasswordChangeRequired(403, 'password-change-required')).toBe(false);
     expect(isPasswordChangeRequired(undefined, null)).toBe(false);
+  });
+});
+
+describe('isSessionRevoked', () => {
+  it('matches a 401 whose problem type ends with session-revoked', () => {
+    expect(isSessionRevoked(401, { type: 'https://medimg.dev/problems/session-revoked' })).toBe(
+      true,
+    );
+    expect(isSessionRevoked(401, { type: '/problems/session-revoked' })).toBe(true);
+  });
+
+  it('ignores other statuses, other types and an expired token without a type', () => {
+    expect(isSessionRevoked(403, { type: '/problems/session-revoked' })).toBe(false);
+    expect(isSessionRevoked(401, { type: '/problems/password-change-required' })).toBe(false);
+    expect(isSessionRevoked(401, { title: 'Unauthorized', detail: 'Token expired' })).toBe(false);
+    expect(isSessionRevoked(undefined, null)).toBe(false);
   });
 });
 

@@ -23,6 +23,7 @@ export default function LoginPage() {
   const location = useLocation();
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
   const sessionExpired = useAuthStore((s) => s.sessionExpired);
+  const sessionRevoked = useAuthStore((s) => s.sessionRevoked);
   const passwordChangedSignIn = useAuthStore((s) => s.passwordChangedSignIn);
   const target = returnTarget(location.state);
 
@@ -85,6 +86,14 @@ export default function LoginPage() {
                 type="success"
                 showIcon
                 title={t('auth.passwordChanged')}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {sessionRevoked && !login.isError && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t('auth.sessionRevoked')}
                 style={{ marginBottom: 16 }}
               />
             )}

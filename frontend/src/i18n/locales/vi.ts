@@ -52,6 +52,8 @@ export const vi = {
     demoHint: 'Nhấn để điền sẵn. Mật khẩu chung: {{password}}',
     loginFailed: 'Đăng nhập thất bại',
     sessionExpired: 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.',
+    sessionRevoked:
+      'Phiên đăng nhập của bạn đã bị kết thúc. Hãy đăng nhập lại; nếu không được, hãy liên hệ quản trị viên.',
     features: {
       upload:
         'Tải X-quang (PNG/JPG, DICOM) hoặc ảnh 3D (NIfTI, DICOM, chồng ảnh) và quản lý ca bệnh',

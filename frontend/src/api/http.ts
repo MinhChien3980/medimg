@@ -1,6 +1,6 @@
 import axios, { AxiosHeaders, isAxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/features/auth/authStore';
-import { isPasswordChangeRequired, parseBlobBody } from './problem';
+import { isPasswordChangeRequired, isSessionRevoked, parseBlobBody } from './problem';
 import type { TokenResponse } from './types';
 
 export const API_BASE = '/api/v1';
@@ -99,11 +99,22 @@ http.interceptors.response.use(undefined, async (error: unknown) => {
     throw error;
   }
   const config = error.config as RetriableConfig;
+  const sent = AxiosHeaders.from(config.headers).get('Authorization');
+  const current = useAuthStore.getState().accessToken;
+  // The server ended the session (account locked): a refresh would be refused as well, so sign
+  // out at once, and say why. Only when the answer is about the current token: a request still
+  // carrying an older one (refreshed, or another sign-in since) is replayed below.
+  if (
+    isSessionRevoked(error.response.status, error.response.data) &&
+    current !== null &&
+    sent === `Bearer ${current}`
+  ) {
+    useAuthStore.getState().revoke();
+    throw new SessionExpiredError(error);
+  }
   if (config._authRetried) throw error;
   config._authRetried = true;
 
-  const sent = AxiosHeaders.from(config.headers).get('Authorization');
-  const current = useAuthStore.getState().accessToken;
   // Another request already refreshed while this one was in flight: just replay it.
   const token = current && sent !== `Bearer ${current}` ? current : await refreshAccessToken();
   setBearer(config, token);

@@ -117,6 +117,17 @@ export function isPasswordChangeRequired(status: number | undefined, data: unkno
   return status === 403 && typeIs(problemTypeOf(data), PASSWORD_CHANGE_REQUIRED);
 }
 
+/** Last path segment of the ProblemDetail `type` of a 401 for a session the server ended. */
+export const SESSION_REVOKED = 'session-revoked';
+
+/**
+ * True for the 401 core-service answers once the account behind a still valid access token was
+ * locked (or removed): its refresh token is refused too, so the session is over.
+ */
+export function isSessionRevoked(status: number | undefined, data: unknown): boolean {
+  return status === 401 && typeIs(problemTypeOf(data), SESSION_REVOKED);
+}
+
 /**
  * Error bodies of `responseType: 'blob'` requests (CSV export, PDF preview) arrive as a Blob.
  * Returns the parsed ProblemDetail when the blob holds JSON, the blob itself otherwise.
