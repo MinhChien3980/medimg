@@ -438,7 +438,8 @@ export function adminModel(overrides: Partial<AdminModelDto> = {}): AdminModelDt
     name: model.name,
     task: 'CLASSIFICATION_2D',
     inputTypes: ['IMAGE_2D', 'DICOM_2D'],
-    modality: 'CR',
+    modality: 'CR,DX',
+    bodyPart: 'CHEST',
     status: 'ACTIVE',
     stats: {
       jobs: 1234,
@@ -454,6 +455,9 @@ export function adminModel(overrides: Partial<AdminModelDto> = {}): AdminModelDt
 
 export function dashboard(overrides: Partial<DashboardDto> = {}): DashboardDto {
   return {
+    from: '2026-10-28',
+    to: '2026-11-26',
+    zone: 'Asia/Ho_Chi_Minh',
     totals: {
       cases: 12,
       studies: 15,
@@ -464,8 +468,22 @@ export function dashboard(overrides: Partial<DashboardDto> = {}): DashboardDto {
     },
     processing: {
       perModel: [
-        { modelCode: 'cxr-multilabel', jobs: 1100, avgMs: 2150, p50Ms: 1800, p95Ms: 5400 },
-        { modelCode: 'ct-totalseg', jobs: 100, avgMs: 95_000, p50Ms: 90_000, p95Ms: 130_000 },
+        {
+          modelCode: 'cxr-multilabel',
+          jobs: 1100,
+          avgMs: 2150,
+          p50Ms: 1800,
+          p95Ms: 5400,
+          avgInferenceMs: 640,
+        },
+        {
+          modelCode: 'ct-totalseg',
+          jobs: 100,
+          avgMs: 95_000,
+          p50Ms: 90_000,
+          p95Ms: 130_000,
+          avgInferenceMs: 71_000,
+        },
       ],
     },
     review: { reviewed: 40, accepted: 25, edited: 5, rejected: 10, acceptanceRate: 0.75 },

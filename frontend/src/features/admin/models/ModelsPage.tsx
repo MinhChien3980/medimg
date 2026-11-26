@@ -21,6 +21,14 @@ const STATUS_COLORS: Record<ModelStatus, string> = {
   RETIRED: 'default',
 };
 
+/** The DICOM modalities a model takes (`CR,DX`); none listed when it takes any. */
+function modalitiesOf(m: AdminModelDto): string[] {
+  return (m.modality ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+}
+
 /** A muted dash for a model the server does not switch, with the reason for every user. */
 function NoSwitch({ reason }: { reason: string }) {
   return (
@@ -101,7 +109,9 @@ export default function ModelsPage() {
       dataIndex: 'inputTypes',
       render: (types: InputType[], m) => (
         <Space size={[4, 4]} wrap>
-          <Tag>{m.modality}</Tag>
+          {modalitiesOf(m).map((modality) => (
+            <Tag key={modality}>{modality}</Tag>
+          ))}
           {types.map((type) => (
             <Tag key={type} color="geekblue">
               {t(`caseDetail.inputTypes.${type}`)}
@@ -150,7 +160,7 @@ export default function ModelsPage() {
       title: t('admin.models.columns.p95'),
       key: 'p95',
       align: 'right',
-      render: (_: unknown, m) => formatDurationMs(m.stats.p95InferenceMs ?? null, lang),
+      render: (_: unknown, m) => formatDurationMs(m.stats.p95InferenceMs, lang),
     },
     {
       title: t('admin.models.columns.lastUsed'),

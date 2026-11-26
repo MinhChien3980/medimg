@@ -80,6 +80,32 @@ describe('ModelsPage', () => {
     expect(within(seg).getAllByText('—')).toHaveLength(3);
   });
 
+  it('shows each modality a model takes, and none when it takes any', async () => {
+    modelsBackend([
+      adminModel({ modality: 'CR,DX', bodyPart: 'CHEST' }),
+      adminModel({
+        id: segModel.id,
+        name: segModel.name,
+        task: 'SEGMENTATION_3D',
+        inputTypes: ['NIFTI'],
+        modality: null,
+        bodyPart: null,
+      }),
+    ]);
+    renderModels();
+
+    const tagsOf = (row: HTMLElement) =>
+      [...row.querySelectorAll('.ant-tag')].map((tag) => tag.textContent);
+    expect(tagsOf(await rowOf(model.name))).toEqual([
+      'CR',
+      'DX',
+      '2D image',
+      'DICOM X-ray',
+      'Active',
+    ]);
+    expect(tagsOf(await rowOf(segModel.name))).toEqual(['NIfTI', 'Active']);
+  });
+
   it('disables a model after a confirmation and refreshes the AI panel lists', async () => {
     const user = userEvent.setup();
     const calls = modelsBackend([adminModel()]);

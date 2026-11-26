@@ -744,12 +744,15 @@ export interface TemporaryPasswordResponse {
  */
 export type ModelStatus = 'ACTIVE' | 'DISABLED' | 'STAGING' | 'RETIRED';
 
+/** Over every job of the model; times are the inference times the worker reported. */
 export interface ModelStatsDto {
   jobs: number;
   done: number;
   failed: number;
+  /** Null without any DONE job. */
   avgInferenceMs: number | null;
-  p95InferenceMs?: number | null;
+  p95InferenceMs: number | null;
+  /** Null when the model never ran. */
   lastUsedAt: IsoDateTime | null;
 }
 
@@ -761,7 +764,10 @@ export interface AdminModelDto {
   name: string;
   task: ModelTask;
   inputTypes: InputType[];
-  modality: string;
+  /** Comma separated DICOM modalities (e.g. `CR,DX`); null when the model takes any. */
+  modality: string | null;
+  /** e.g. `CHEST`; null when not tied to a body part. */
+  bodyPart: string | null;
   status: ModelStatus;
   stats: ModelStatsDto;
 }
@@ -771,13 +777,17 @@ export interface AdminModelDto {
 /** `YYYY-MM-DD`, a calendar day in the server's dashboard time zone. */
 export type IsoDate = string;
 
+/** Over the DONE jobs of the model queued in the range. */
 export interface DashboardModelProcessing {
   modelCode: string;
+  /** Number of DONE jobs. */
   jobs: number;
-  /** Queue to finish of DONE jobs, in milliseconds; null without any DONE job. */
+  /** Queue to finish (of the last attempt), in milliseconds; null without any DONE job. */
   avgMs: number | null;
   p50Ms: number | null;
   p95Ms: number | null;
+  /** Inference time reported by the worker, in milliseconds; null when none was reported. */
+  avgInferenceMs: number | null;
 }
 
 export interface DashboardDay {
@@ -798,12 +808,17 @@ export interface DashboardRecentJob {
 
 /** `GET /dashboard?from=&to=`: aggregates only, nothing that identifies a patient. */
 export interface DashboardDto {
+  /** The range answered, both days included, in the dashboard time zone `zone`. */
+  from: IsoDate;
+  to: IsoDate;
+  zone: string;
   totals: {
     cases: number;
     studies: number;
     studiesByInputType: Partial<Record<InputType, number>>;
     jobs: number;
     jobsByStatus: Partial<Record<PredictionStatus, number>>;
+    /** Reports created in the range, by their current status. */
     reports: { draft: number; final: number };
   };
   processing: { perModel: DashboardModelProcessing[] };
