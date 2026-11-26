@@ -21,6 +21,19 @@ function protectedPatient(valid: string, seen: string[] = []) {
   });
 }
 
+/** The 401 core-service answers once the account behind the token was locked. */
+function sessionRevoked() {
+  return HttpResponse.json(
+    {
+      type: 'https://medimg.dev/problems/session-revoked',
+      title: 'Unauthorized',
+      status: 401,
+      detail: 'The session is no longer valid, please log in again',
+    },
+    { status: 401 },
+  );
+}
+
 describe('http client auth', () => {
   it('attaches the access token as a Bearer header', async () => {
     useAuthStore.getState().setSession(tokens('good', 'r1'));
@@ -83,6 +96,54 @@ describe('http client auth', () => {
     expect(s.user).toBeNull();
     expect(s.refreshToken).toBeNull();
     expect(s.sessionExpired).toBe(true);
+  });
+
+  it('ends the session without a refresh when the server revoked it (account locked)', async () => {
+    useAuthStore.getState().setSession(tokens('acc', 'r1'));
+    let refreshCalls = 0;
+    server.use(
+      mock.get(`${API}/patients/:id`, () => sessionRevoked()),
+      mock.post(`${API}/auth/refresh`, () => {
+        refreshCalls += 1;
+        return HttpResponse.json(tokens('fresh', 'r2'));
+      }),
+    );
+
+    const outcomes = await Promise.allSettled([
+      patientsApi.get(patient.id),
+      patientsApi.get(patient.id),
+    ]);
+
+    for (const o of outcomes) {
+      expect(o.status).toBe('rejected');
+      if (o.status === 'rejected') expect(o.reason).toBeInstanceOf(SessionExpiredError);
+    }
+    expect(refreshCalls).toBe(0);
+    const s = useAuthStore.getState();
+    expect(s.user).toBeNull();
+    expect(s.refreshToken).toBeNull();
+    expect(s.sessionRevoked).toBe(true);
+    expect(s.sessionExpired).toBe(false);
+  });
+
+  it('keeps a newer session when an older one is answered session-revoked', async () => {
+    useAuthStore.getState().setSession(tokens('old', 'r1'));
+    const seen: string[] = [];
+    server.use(
+      mock.get(`${API}/patients/:id`, ({ request }) => {
+        const auth = request.headers.get('Authorization') ?? '';
+        seen.push(auth);
+        if (auth === 'Bearer new') return HttpResponse.json(patient);
+        // Someone else signed in on this browser while the request was in flight.
+        useAuthStore.getState().setSession(tokens('new', 'r-new'));
+        return sessionRevoked();
+      }),
+    );
+
+    await expect(patientsApi.get(patient.id)).resolves.toEqual(patient);
+    expect(seen).toEqual(['Bearer old', 'Bearer new']);
+    expect(useAuthStore.getState().accessToken).toBe('new');
+    expect(useAuthStore.getState().sessionRevoked).toBe(false);
   });
 
   it('after a reload (refresh token only) renews before the first call, no 401 round-trip', async () => {

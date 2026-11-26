@@ -1,6 +1,11 @@
 import type {
+  AdminModelDto,
+  AdminUserDto,
   AnnotationDto,
+  AuditEntryDto,
+  DashboardDto,
   FindingDto,
+  Page,
   ReportDto,
   SampleCaseDto,
   MeshArtifact,
@@ -378,4 +383,162 @@ export function finalReport(overrides: Partial<ReportDto> = {}): ReportDto {
     signedAt: '2026-11-25T10:00:00Z',
     ...overrides,
   });
+}
+
+// ---------- Slice 4a: administration, dashboard, audit ----------
+
+export function page<T>(content: T[], overrides: Partial<Page<T>> = {}): Page<T> {
+  return {
+    content,
+    page: 0,
+    size: 20,
+    totalElements: content.length,
+    totalPages: content.length > 0 ? 1 : 0,
+    ...overrides,
+  };
+}
+
+/** `admin` (the signed-in admin of the admin tests) as listed by `GET /admin/users`. */
+export function adminUser(overrides: Partial<AdminUserDto> = {}): AdminUserDto {
+  return {
+    id: admin.id,
+    username: admin.username,
+    fullName: admin.fullName,
+    email: null,
+    roles: ['ADMIN'],
+    status: 'ACTIVE',
+    passwordChangeRequired: false,
+    lastLoginAt: '2026-11-26T07:00:00Z',
+    createdAt: '2026-11-01T08:00:00Z',
+    version: 0,
+    ...overrides,
+  };
+}
+
+export const listedDoctor = adminUser({
+  id: doctor.id,
+  username: doctor.username,
+  fullName: doctor.fullName,
+  email: 'doctor@example.org',
+  roles: ['DOCTOR'],
+  version: 3,
+});
+
+export const secondAdmin = adminUser({
+  id: '00000000-0000-4000-8000-000000000005',
+  username: 'admin2',
+  fullName: 'Second Admin',
+});
+
+export function adminModel(overrides: Partial<AdminModelDto> = {}): AdminModelDto {
+  return {
+    id: model.id,
+    code: model.code,
+    version: model.version,
+    name: model.name,
+    task: 'CLASSIFICATION_2D',
+    inputTypes: ['IMAGE_2D', 'DICOM_2D'],
+    modality: 'CR,DX',
+    bodyPart: 'CHEST',
+    status: 'ACTIVE',
+    stats: {
+      jobs: 1234,
+      done: 1200,
+      failed: 4,
+      avgInferenceMs: 812,
+      p95InferenceMs: 1530,
+      lastUsedAt: '2026-11-26T06:00:00Z',
+    },
+    ...overrides,
+  };
+}
+
+export function dashboard(overrides: Partial<DashboardDto> = {}): DashboardDto {
+  return {
+    from: '2026-10-28',
+    to: '2026-11-26',
+    zone: 'Asia/Ho_Chi_Minh',
+    totals: {
+      cases: 12,
+      studies: 15,
+      studiesByInputType: { IMAGE_2D: 9, NIFTI: 6 },
+      jobs: 1234,
+      jobsByStatus: { DONE: 1200, FAILED: 4, QUEUED: 30 },
+      reports: { draft: 2, final: 7 },
+    },
+    processing: {
+      perModel: [
+        {
+          modelCode: 'cxr-multilabel',
+          jobs: 1100,
+          avgMs: 2150,
+          p50Ms: 1800,
+          p95Ms: 5400,
+          avgInferenceMs: 640,
+        },
+        {
+          modelCode: 'ct-totalseg',
+          jobs: 100,
+          avgMs: 95_000,
+          p50Ms: 90_000,
+          p95Ms: 130_000,
+          avgInferenceMs: 71_000,
+        },
+      ],
+    },
+    review: { reviewed: 40, accepted: 25, edited: 5, rejected: 10, acceptanceRate: 0.75 },
+    labels: [
+      { label: 'Cardiomegaly', accepted: 14 },
+      { label: 'Effusion', accepted: 9 },
+    ],
+    daily: [
+      { date: '2026-11-24', cases: 2, jobs: 5, failedJobs: 0 },
+      { date: '2026-11-25', cases: 0, jobs: 0, failedJobs: 0 },
+      { date: '2026-11-26', cases: 3, jobs: 8, failedJobs: 1 },
+    ],
+    recentJobs: [
+      {
+        jobId: JOB_ID,
+        studyId: study.id,
+        modelCode: 'cxr-multilabel',
+        status: 'DONE',
+        queuedAt: '2026-11-26T06:00:00Z',
+        finishedAt: '2026-11-26T06:00:03Z',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export const emptyDashboard: DashboardDto = dashboard({
+  totals: {
+    cases: 0,
+    studies: 0,
+    studiesByInputType: {},
+    jobs: 0,
+    jobsByStatus: {},
+    reports: { draft: 0, final: 0 },
+  },
+  processing: { perModel: [] },
+  review: { reviewed: 0, accepted: 0, edited: 0, rejected: 0, acceptanceRate: null },
+  labels: [],
+  daily: [{ date: '2026-11-26', cases: 0, jobs: 0, failedJobs: 0 }],
+  recentJobs: [],
+});
+
+export function auditEntry(overrides: Partial<AuditEntryDto> = {}): AuditEntryDto {
+  return {
+    id: 1,
+    occurredAt: '2026-11-26T07:00:00Z',
+    userId: admin.id,
+    username: admin.username,
+    action: 'USER_LOCKED',
+    entityType: 'USER',
+    entityId: doctor.id,
+    outcome: 'SUCCESS',
+    clientIp: '203.0.113.7',
+    userAgent: 'Mozilla/5.0 (test)',
+    detail: { reason: 'left the team', roles: ['DOCTOR'] },
+    ...overrides,
+  };
 }

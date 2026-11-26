@@ -10,6 +10,7 @@ import { useAuthStore } from './authStore';
  * - `annotate`: draw annotations (doctors and technicians; each edits / deletes only their own,
  *   see `canEditAnnotation`).
  * - `report`: create and edit draft reports, add key images, sign, amend (doctors).
+ * - `administer`: the Administration section (users, models, audit log): admins only.
  * - `viewDraftReport`: see a report before it is signed (everyone but researchers, who only see
  *   FINAL reports).
  *
@@ -25,12 +26,13 @@ export type Permission =
   | 'review'
   | 'annotate'
   | 'report'
-  | 'viewDraftReport';
+  | 'viewDraftReport'
+  | 'administer';
 
 const WRITE: readonly Permission[] = ['createCase', 'upload', 'runAi', 'manageJob'];
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  ADMIN: [...WRITE, 'manageSamples', 'viewDraftReport'],
+  ADMIN: [...WRITE, 'manageSamples', 'viewDraftReport', 'administer'],
   DOCTOR: [...WRITE, 'review', 'annotate', 'report', 'viewDraftReport'],
   TECHNICIAN: [...WRITE, 'annotate', 'viewDraftReport'],
   RESEARCHER: [],

@@ -12,15 +12,8 @@ import type { LoginRequest } from '@/api/types';
 import { LanguageSwitch } from '@/features/layout/LanguageSwitch';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { selectIsAuthenticated, useAuthStore } from './authStore';
+import { returnTarget } from './redirects';
 import { DEMO_ACCOUNTS, DEMO_PASSWORD, useLogin } from './session';
-
-function redirectTarget(state: unknown): string {
-  if (typeof state === 'object' && state !== null && 'from' in state) {
-    const from = state.from;
-    if (typeof from === 'string' && from.startsWith('/') && from !== '/login') return from;
-  }
-  return '/cases';
-}
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -30,7 +23,9 @@ export default function LoginPage() {
   const location = useLocation();
   const isAuthenticated = useAuthStore(selectIsAuthenticated);
   const sessionExpired = useAuthStore((s) => s.sessionExpired);
-  const target = redirectTarget(location.state);
+  const sessionRevoked = useAuthStore((s) => s.sessionRevoked);
+  const passwordChangedSignIn = useAuthStore((s) => s.passwordChangedSignIn);
+  const target = returnTarget(location.state);
 
   if (isAuthenticated && !login.isPending) return <Navigate to={target} replace />;
 
@@ -86,7 +81,23 @@ export default function LoginPage() {
               {t('auth.title')}
             </Typography.Title>
 
-            {sessionExpired && !login.isError && (
+            {passwordChangedSignIn && !login.isError && (
+              <Alert
+                type="success"
+                showIcon
+                title={t('auth.passwordChanged')}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {sessionRevoked && !login.isError && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t('auth.sessionRevoked')}
+                style={{ marginBottom: 16 }}
+              />
+            )}
+            {sessionExpired && !passwordChangedSignIn && !login.isError && (
               <Alert
                 type="warning"
                 showIcon

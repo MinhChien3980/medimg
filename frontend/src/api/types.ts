@@ -33,11 +33,19 @@ export interface UserRef {
 
 export type Role = 'ADMIN' | 'DOCTOR' | 'TECHNICIAN' | 'RESEARCHER';
 
+export const ROLES: readonly Role[] = ['ADMIN', 'DOCTOR', 'TECHNICIAN', 'RESEARCHER'];
+
 export interface UserDto {
   id: Uuid;
   username: string;
   fullName: string;
   roles: Role[];
+  /**
+   * Set after an admin created the account or reset its password: every API except `/me`,
+   * `/me/password` and `/auth/*` answers 403 (`password-change-required`) until the user changes
+   * it. Absent from sessions stored before slice 4a, which means false.
+   */
+  passwordChangeRequired?: boolean;
 }
 
 export interface LoginRequest {
@@ -663,4 +671,199 @@ export interface PdfLinkDto {
   /** Presigned GET URL of `report.pdf` (same origin). */
   url: string;
   expiresAt: IsoDateTime;
+}
+
+// ---------- Slice 4a: account ----------
+
+/** `POST /me/password` → 204. A wrong current password is a 422 (not a 401, which would log out). */
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
+}
+
+// ---------- Slice 4a: user administration (ADMIN) ----------
+
+export type UserStatus = 'ACTIVE' | 'LOCKED';
+
+export interface AdminUserDto {
+  id: Uuid;
+  username: string;
+  fullName: string;
+  email: string | null;
+  roles: Role[];
+  status: UserStatus;
+  passwordChangeRequired: boolean;
+  lastLoginAt: IsoDateTime | null;
+  createdAt: IsoDateTime;
+  /** Optimistic lock: sent back with `PUT /admin/users/{id}`, a stale one is a 409. */
+  version: number;
+}
+
+/** `GET /admin/users`; `page` is 0-based. */
+export interface AdminUserQuery {
+  q?: string;
+  role?: Role;
+  status?: UserStatus;
+  page: number;
+  size: number;
+}
+
+export interface CreateUserRequest {
+  /** 3–50 of `[a-z0-9._-]`, unique ignoring case (409 otherwise). */
+  username: string;
+  /** 1–100 characters. */
+  fullName: string;
+  email?: string;
+  /** At least one. */
+  roles: Role[];
+}
+
+/** 201: the temporary password is returned once and never again. */
+export interface CreateUserResponse {
+  user: AdminUserDto;
+  temporaryPassword: string;
+}
+
+export interface UpdateUserRequest {
+  fullName: string;
+  email?: string;
+  roles: Role[];
+  version: number;
+}
+
+/** `POST /admin/users/{id}/reset-password`. */
+export interface TemporaryPasswordResponse {
+  temporaryPassword: string;
+}
+
+// ---------- Slice 4a: model administration (ADMIN) ----------
+
+/**
+ * Only ACTIVE and DISABLED can be switched (`POST /admin/models/{id}/enable|disable`); a model in
+ * STAGING or RETIRED is listed but the server refuses to switch it (409 `…/model-status`).
+ */
+export type ModelStatus = 'ACTIVE' | 'DISABLED' | 'STAGING' | 'RETIRED';
+
+/** Over every job of the model; times are the inference times the worker reported. */
+export interface ModelStatsDto {
+  jobs: number;
+  done: number;
+  failed: number;
+  /** Null without any DONE job. */
+  avgInferenceMs: number | null;
+  p95InferenceMs: number | null;
+  /** Null when the model never ran. */
+  lastUsedAt: IsoDateTime | null;
+}
+
+/** `GET /admin/models` item. A DISABLED model is left out of `GET /models`. */
+export interface AdminModelDto {
+  id: Uuid;
+  code: string;
+  version: string;
+  name: string;
+  task: ModelTask;
+  inputTypes: InputType[];
+  /** Comma separated DICOM modalities (e.g. `CR,DX`); null when the model takes any. */
+  modality: string | null;
+  /** e.g. `CHEST`; null when not tied to a body part. */
+  bodyPart: string | null;
+  status: ModelStatus;
+  stats: ModelStatsDto;
+}
+
+// ---------- Slice 4a: dashboard (every role) ----------
+
+/** `YYYY-MM-DD`, a calendar day in the server's dashboard time zone. */
+export type IsoDate = string;
+
+/** Over the DONE jobs of the model queued in the range. */
+export interface DashboardModelProcessing {
+  modelCode: string;
+  /** Number of DONE jobs. */
+  jobs: number;
+  /** Queue to finish (of the last attempt), in milliseconds; null without any DONE job. */
+  avgMs: number | null;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  /** Inference time reported by the worker, in milliseconds; null when none was reported. */
+  avgInferenceMs: number | null;
+}
+
+export interface DashboardDay {
+  date: IsoDate;
+  cases: number;
+  jobs: number;
+  failedJobs: number;
+}
+
+export interface DashboardRecentJob {
+  jobId: Uuid;
+  studyId: Uuid;
+  modelCode: string;
+  status: PredictionStatus;
+  queuedAt: IsoDateTime;
+  finishedAt: IsoDateTime | null;
+}
+
+/** `GET /dashboard?from=&to=`: aggregates only, nothing that identifies a patient. */
+export interface DashboardDto {
+  /** The range answered, both days included, in the dashboard time zone `zone`. */
+  from: IsoDate;
+  to: IsoDate;
+  zone: string;
+  totals: {
+    cases: number;
+    studies: number;
+    studiesByInputType: Partial<Record<InputType, number>>;
+    jobs: number;
+    jobsByStatus: Partial<Record<PredictionStatus, number>>;
+    /** Reports created in the range, by their current status. */
+    reports: { draft: number; final: number };
+  };
+  processing: { perModel: DashboardModelProcessing[] };
+  review: {
+    reviewed: number;
+    accepted: number;
+    edited: number;
+    rejected: number;
+    /** (accepted + edited) / reviewed, 0..1; null when nothing was reviewed. */
+    acceptanceRate: number | null;
+  };
+  /** Top 10 AI labels accepted or edited, most first. */
+  labels: Array<{ label: string; accepted: number }>;
+  /** One entry per day of the range, empty days included. */
+  daily: DashboardDay[];
+  /** The 10 latest jobs. */
+  recentJobs: DashboardRecentJob[];
+}
+
+// ---------- Slice 4a: audit log (ADMIN) ----------
+
+export type AuditOutcome = 'SUCCESS' | 'FAILURE';
+
+export interface AuditEntryDto {
+  id: number | string;
+  occurredAt: IsoDateTime;
+  userId: Uuid | null;
+  username: string | null;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  outcome: AuditOutcome | null;
+  clientIp: string | null;
+  userAgent: string | null;
+  detail: unknown;
+}
+
+/** Filters of `GET /admin/audit`, `/admin/audit/actions` and `/admin/audit/export.csv`. */
+export interface AuditQuery {
+  username?: string;
+  action?: string;
+  entityType?: string;
+  entityId?: string;
+  outcome?: AuditOutcome;
+  /** Inclusive days, at most 93 days in all. */
+  from: IsoDate;
+  to: IsoDate;
 }

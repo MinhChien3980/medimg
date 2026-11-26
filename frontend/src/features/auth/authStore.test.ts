@@ -61,4 +61,57 @@ describe('authStore', () => {
     expect(primaryRole({ ...doctor, roles: ['RESEARCHER', 'ADMIN'] })).toBe('ADMIN');
     expect(primaryRole({ ...doctor, roles: ['TECHNICIAN'] })).toBe('TECHNICIAN');
   });
+
+  it('requirePasswordChange / passwordChanged toggle the flag of the signed-in user only', () => {
+    useAuthStore.getState().requirePasswordChange();
+    expect(useAuthStore.getState().user).toBeNull();
+
+    useAuthStore.getState().setSession(tokens('a', 'r'));
+    useAuthStore.getState().requirePasswordChange();
+    expect(useAuthStore.getState().user?.passwordChangeRequired).toBe(true);
+    expect(JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) ?? '{}')).toMatchObject({
+      state: { user: { passwordChangeRequired: true } },
+    });
+
+    useAuthStore.getState().passwordChanged();
+    expect(useAuthStore.getState().user?.passwordChangeRequired).toBe(false);
+    expect(useAuthStore.getState().accessToken).toBe('a');
+  });
+
+  it('signOutAfterPasswordChange ends the session and tells the login page why', () => {
+    useAuthStore.getState().setSession(tokens('a', 'r'));
+    useAuthStore.getState().expire();
+    useAuthStore.getState().signOutAfterPasswordChange();
+    let s = useAuthStore.getState();
+    expect(s.user).toBeNull();
+    expect(s.refreshToken).toBeNull();
+    expect(s.passwordChangedSignIn).toBe(true);
+    expect(s.sessionExpired).toBe(false);
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).not.toContain('passwordChangedSignIn');
+
+    useAuthStore.getState().setSession(tokens('b', 'r2'));
+    s = useAuthStore.getState();
+    expect(s.passwordChangedSignIn).toBe(false);
+  });
+
+  it('revoke() ends a session the server ended, and tells the login page why', () => {
+    useAuthStore.getState().setSession(tokens('a', 'r'));
+    useAuthStore.getState().revoke();
+    let s = useAuthStore.getState();
+    expect(s.user).toBeNull();
+    expect(s.accessToken).toBeNull();
+    expect(s.refreshToken).toBeNull();
+    expect(s.sessionRevoked).toBe(true);
+    expect(s.sessionExpired).toBe(false);
+    expect(s.passwordChangedSignIn).toBe(false);
+    expect(localStorage.getItem(AUTH_STORAGE_KEY)).not.toContain('sessionRevoked');
+
+    useAuthStore.getState().setSession(tokens('b', 'r2'));
+    s = useAuthStore.getState();
+    expect(s.sessionRevoked).toBe(false);
+
+    useAuthStore.getState().revoke();
+    useAuthStore.getState().expire();
+    expect(useAuthStore.getState().sessionRevoked).toBe(false);
+  });
 });
