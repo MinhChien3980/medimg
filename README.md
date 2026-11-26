@@ -15,7 +15,8 @@ report. Ready-made sample cases let anyone try it without data of their own.
 | 2b | DICOM X-ray input, ZIPs of PNG/JPEG slices, multipart upload for files over 64 MB, sample-case gallery | ✅ done |
 | 3 | Finding review (accept / edit / reject, manual findings), annotations and measurements on X-ray and CT, signed PDF reports with key images and amendments | ✅ done |
 | 4a | Dashboard for every role, user administration (lock, password reset, forced change), model enable/disable, audit log search and CSV export | ✅ done |
-| 4b | End-to-end tests on the Docker stack in CI, cloud deploy | planned |
+| 4b | End-to-end tests on the whole Docker stack in CI, nothing mocked | ✅ done |
+| 5 | Cloud deploy | planned |
 
 ## Architecture
 
@@ -218,11 +219,14 @@ All commands run from the repository root.
 | backend | `(cd backend/core-service && ./gradlew test)` | unit, ArchUnit, integration with Testcontainers (PostgreSQL, Redis, SeaweedFS; needs Docker) |
 | ai-worker | `docker build --target test -t medimg-ai-worker:test ai/inference` then `docker run --rm medimg-ai-worker:test sh -c "ruff check . && python -m pytest -q"` | Ruff, pytest with fakeredis/moto, real-model tests (marker `slow`; add `-m "not slow"` to skip them) |
 | frontend | `(cd frontend && npm run lint && npm run typecheck && npm test -- --run)` | ESLint, TypeScript, Vitest, React Testing Library, MSW |
-| frontend (browser) | `(cd frontend && npm run e2e:install && npm run e2e)` | Playwright in headless Chromium: MPR, labelmap overlay, 3D meshes and the 3D → MPR jump on a synthetic CT, under the production CSP |
+| frontend (browser) | `(cd frontend && npm run e2e:install && npm run e2e)` | Playwright in headless Chromium with a mocked API: MPR, labelmap overlay, 3D meshes and the 3D → MPR jump on a synthetic CT, under the production CSP |
+| end to end | start the stack (Option A), then `(cd frontend && npm run e2e:install && npm run e2e:stack)` | Playwright through Nginx against the real services and workers: a chest X-ray from upload to a signed PDF, a CT through MPR and TotalSegmentator, user and model administration with the audit CSV, and what a researcher may not do |
 | tools | `(cd tools && python -m unittest discover -s tests)` | the HTTP-range ZIP reader that fetches the samples |
 
 On pull requests CI runs only the jobs whose directory changed, and the ai-worker job skips the real-model tests.
-Pushes to `main` run every job, including the real-model tests.
+Pushes to `dev` and `main` run every job, including the real-model tests. The end-to-end job builds the images, starts
+the stack and runs the end-to-end suite (about 7 minutes) whenever the backend, the frontend, the workers or `deploy/`
+change; on failure it keeps the Playwright traces and the logs of every service.
 
 ## Performance
 
