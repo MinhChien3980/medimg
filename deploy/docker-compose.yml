@@ -12,7 +12,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       MEDIMG_OWNER_PASSWORD: ${MEDIMG_OWNER_PASSWORD:-medimg_owner}
       MEDIMG_APP_PASSWORD: ${MEDIMG_APP_PASSWORD:-medimg_app}
-    command: ["postgres", "-c", "shared_buffers=384MB"]
+    # random_page_cost 1.1: data on SSD, where an index lookup costs little more than a sequential read.
+    command: ["postgres", "-c", "shared_buffers=384MB", "-c", "random_page_cost=1.1"]
     ports: ["${PG_PORT:-5432}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data

@@ -10,6 +10,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -196,6 +199,11 @@ public abstract class IntegrationTest {
             throw new IllegalStateException("password change failed: " + changed);
         }
         return session(username, OWN_PASSWORD);
+    }
+
+    /** A connection to the test database as its superuser, for checks the application role may not run. */
+    protected static Connection superuserConnection() throws SQLException {
+        return DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
     }
 
     protected String createCase(String token) {

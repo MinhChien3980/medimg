@@ -18,6 +18,9 @@ GRANT USAGE ON SCHEMA medimg TO medimg_app;
 ALTER ROLE medimg_owner SET search_path = medimg;
 ALTER ROLE medimg_app   SET search_path = medimg;
 
+-- Trigram indexes for substring search (V9); installing an extension needs a superuser.
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA medimg;
+
 ALTER DEFAULT PRIVILEGES FOR ROLE medimg_owner IN SCHEMA medimg
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO medimg_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE medimg_owner IN SCHEMA medimg

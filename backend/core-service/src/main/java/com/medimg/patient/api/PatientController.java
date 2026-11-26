@@ -3,7 +3,6 @@ package com.medimg.patient.api;
 import java.util.UUID;
 
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -64,10 +63,10 @@ class PatientController {
     }
 
     @GetMapping
-    PageResponse<PatientDto> search(@RequestParam(required = false) String q,
+    PageResponse<PatientDto> search(@RequestParam(required = false) @Size(max = 100) String q,
                                     @RequestParam(defaultValue = "0") @Min(0) int page,
                                     @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return service.search(q, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
+        return service.search(q, PageRequest.of(page, size));
     }
 
     @PostMapping
