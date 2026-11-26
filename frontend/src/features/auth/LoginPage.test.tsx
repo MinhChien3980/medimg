@@ -21,7 +21,7 @@ describe('LoginPage', () => {
 
     renderWithProviders(<LoginPage />, {
       route: '/login',
-      extraRoutes: [{ path: '/cases', element: <LocationProbe /> }],
+      extraRoutes: [{ path: '/dashboard', element: <LocationProbe /> }],
     });
 
     expect(screen.getByText('Research demo only – not for diagnostic use')).toBeInTheDocument();
@@ -30,7 +30,7 @@ describe('LoginPage', () => {
     expect(screen.getByLabelText('Password')).toHaveValue('Demo@12345');
 
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(await screen.findByTestId('location')).toHaveTextContent('/cases');
+    expect(await screen.findByTestId('location')).toHaveTextContent('/dashboard');
     expect(body).toEqual({ username: 'doctor', password: 'Demo@12345' });
     expect(useAuthStore.getState().accessToken).toBe('acc');
   });
@@ -47,7 +47,7 @@ describe('LoginPage', () => {
 
     renderWithProviders(<LoginPage />, {
       route: '/login',
-      extraRoutes: [{ path: '/cases', element: <LocationProbe /> }],
+      extraRoutes: [{ path: '/dashboard', element: <LocationProbe /> }],
     });
 
     const account = screen.getByRole('button', { name: /researcher/ });
@@ -55,7 +55,7 @@ describe('LoginPage', () => {
     await user.click(account);
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    expect(await screen.findByTestId('location')).toHaveTextContent('/cases');
+    expect(await screen.findByTestId('location')).toHaveTextContent('/dashboard');
     expect(body).toEqual({ username: 'researcher', password: 'Demo@12345' });
   });
 
@@ -86,5 +86,39 @@ describe('LoginPage', () => {
     expect(await screen.findByText('Invalid username or password')).toBeInTheDocument();
     expect(screen.getByText('Sign-in failed')).toBeInTheDocument();
     expect(useAuthStore.getState().user).toBeNull();
+  });
+
+  it('says the password was changed when the session ended with the change', () => {
+    useAuthStore.getState().setSession(tokens('acc', 'ref'));
+    useAuthStore.getState().expire();
+    useAuthStore.getState().signOutAfterPasswordChange();
+
+    renderWithProviders(<LoginPage />, { route: '/login' });
+    expect(
+      screen.getByText('Your password was changed. Sign in with the new password.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Your session has expired, please sign in again.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('signs in with a temporary password: the session carries the change-required flag', async () => {
+    const user = userEvent.setup();
+    server.use(
+      mock.post(`${API}/auth/login`, () =>
+        HttpResponse.json(tokens('acc', 'ref', { ...researcher, passwordChangeRequired: true })),
+      ),
+    );
+    renderWithProviders(<LoginPage />, {
+      route: '/login',
+      extraRoutes: [{ path: '/dashboard', element: <LocationProbe /> }],
+    });
+    await user.type(screen.getByLabelText('Username'), 'researcher');
+    await user.type(screen.getByLabelText('Password'), 'Temp-Pass-123');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    // The route guard (tested with RequireAuth) then keeps the user on the password page.
+    expect(await screen.findByTestId('location')).toHaveTextContent('/dashboard');
+    expect(useAuthStore.getState().user?.passwordChangeRequired).toBe(true);
   });
 });
