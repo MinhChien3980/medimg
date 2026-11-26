@@ -160,7 +160,10 @@ DICOM X-ray, normalised by the worker to an 8-bit PNG) get the canvas viewer; `N
   (single-flight: concurrent requests share one `/auth/refresh`, which matters because refresh
   tokens rotate) and replays the requests. If the server rejects the refresh the session is
   cleared, the route guard sends the user to `/login` and the login page says the session
-  expired. `/auth/*` calls use a client without interceptors: login and logout never carry an
+  expired. A 401 whose ProblemDetail `type` ends in `/session-revoked` (the account was locked)
+  signs out at once without a refresh (it would be refused too) and the login page says the
+  session was ended; a request that still carried an older token is replayed instead, so a newer
+  session is never ended by it. `/auth/*` calls use a client without interceptors: login and logout never carry an
   access token, and logout clears the local session first, then revokes the refresh token.
 - **Permissions.** `features/auth/permissions.ts` maps roles to UI actions (create case, upload,
   run AI, cancel / retry a job, and, for admins only, manage sample cases; from slice 3 `review`
@@ -322,11 +325,16 @@ DICOM X-ray, normalised by the worker to an 8-bit PNG) get the canvas viewer; `N
   admins see drafts read-only. The case page shows each study's report status.
 - **Password change.** `/account/password` (account menu → Change password) sends
   `POST /me/password {currentPassword, newPassword}`. The form checks the server's policy first and
-  lists it next to the field: at least 10 characters (UTF-16 length, like Java), at least one letter
-  and one digit of any script (`\p{L}`, `\p{Nd}`), different from the current password, not
-  containing the username (ignoring case); the confirmation must match. A wrong current password
-  is a 422 (not a 401, which would log out) and is shown on that field; server field errors go on
-  their field, anything else above the form. After a 204 the client refreshes its tokens, so no
+  lists it next to the field: at least 10 characters (code points, as the server counts them), at
+  most 72 bytes in UTF-8 (BCrypt's limit: an accented letter or an emoji counts 2 to 4), at least
+  one letter and one digit of any script (`\p{L}`, `\p{Nd}`), different from the current
+  password, not containing the username (ignoring case); the confirmation must match. Refusals are
+  told apart by their ProblemDetail `type` (`hasProblemType` in `api/problem.ts`): a 422
+  `…/wrong-current-password` (not a 401, which would log out) is shown on the current password, a
+  422 `…/password-policy` maps its `violations` codes (`TOO_SHORT`, `TOO_LONG`, `NO_LETTER`,
+  `NO_DIGIT`, `CONTAINS_USERNAME`, `SAME_AS_CURRENT`) to the translated rules on the new password;
+  server field errors go on their field, anything else (another 422, unknown codes only) above
+  the form. After a 204 the client refreshes its tokens, so no
   access token issued before the change is used again; if the server revoked this session too,
   the user is signed out and the login page says the password was changed.
 - **Forced password change.** When `TokenResponse.user.passwordChangeRequired` is true (a new
@@ -341,7 +349,8 @@ DICOM X-ray, normalised by the worker to an 8-bit PNG) get the canvas viewer; `N
   most 366 days (no future day), kept in the address as `?days=` or `?from=&to=`; an unusable
   address falls back to 30 days with a warning. Cards (cases, studies, jobs and failures, signed
   reports and drafts, AI acceptance rate with "—" when nothing was reviewed), a daily line chart
-  (cases, jobs, failed jobs dashed) and a bar chart of accepted AI labels, the review split,
+  (cases, jobs, failed jobs dashed) and a bar chart of accepted AI labels (raw model codes shown by name through
+  `useStructureName`: `kidney_left` → "Left kidney", chest X-ray labels as sent), the review split,
   studies by input type, jobs by status, processing time per model (average, median, p95, from
   queued to finished of DONE jobs) and the 10 latest jobs linking to the viewer on that run. The
   charts are one lazy chunk (Recharts) and each carries a visually hidden table of its numbers.
@@ -363,11 +372,14 @@ DICOM X-ray, normalised by the worker to an 8-bit PNG) get the canvas viewer; `N
   their own password on the account page rather than by a reset. Those buttons (or the Admin
   checkbox) are disabled with the reason as tooltip and accessible description; a 409/422 the
   server still returns (another admin acted meanwhile) is shown and the list is read again.
-  Locking ends the user's sessions within 15 minutes (the access token lifetime).
+  Locking takes effect at the user's next request: the API answers 401 `…/session-revoked` and
+  their browser signs out (see Tokens).
 - **Model administration.** `/admin/models` lists every model with its jobs, done and failed
   counts, average and p95 inference time and last use. Enable / Disable asks for confirmation
   (disabling: hidden from the AI panel, new runs refused, running jobs finish) and also
-  invalidates the AI panel's `GET /models` lists.
+  invalidates the AI panel's `GET /models` lists. Only ACTIVE and DISABLED models can be switched:
+  a model in STAGING or RETIRED shows a muted "—" whose reason is a tooltip (also from the
+  keyboard) and screen-reader text.
 - **Audit log.** `/admin/audit` asks `GET /admin/audit` for a period of at most 93 days counting
   both ends (default: the last 7) with optional username, action (dropdown from
   `GET /admin/audit/actions` for the period being edited), entity type (suggestions, free text),
