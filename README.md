@@ -148,6 +148,17 @@ docker compose -f deploy/docker-compose.yml --profile full up --build
 
 Open http://localhost:8088. The API is also published on http://localhost:8080 (Swagger UI: `/swagger-ui.html`).
 
+### Upgrading an existing database
+
+core-service applies the Flyway migrations when it starts. Migration V9 needs the `pg_trgm` extension, which the init
+script installs only when it creates a new database. A database created before V9 needs it once, as the superuser:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec postgres psql -U postgres -d medimg -c "CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA medimg"
+```
+
+Without it core-service stops at V9 with `permission denied to create extension "pg_trgm"`.
+
 ### Sample CT scans
 
 Two CT scans from the TotalSegmentator dataset can be fetched (about 65 MB; only the needed files are downloaded from
@@ -212,6 +223,36 @@ All commands run from the repository root.
 
 On pull requests CI runs only the jobs whose directory changed, and the ai-worker job skips the real-model tests.
 Pushes to `main` run every job, including the real-model tests.
+
+## Performance
+
+Measured on PostgreSQL 17 (Docker, 768 MB, warm cache) seeded with a busy year: 200 000 cases, 250 000 AI jobs,
+690 000 findings, 100 000 reports and 2 million audit entries. Times are the database time of one request (the page
+and its total, or every query of the dashboard).
+
+| Request | Before | After |
+| --- | --- | --- |
+| Case search by text | 155 ms | 7 ms |
+| Dashboard, last 30 days (the landing page) | 400 ms | 140 ms |
+| Dashboard, 366 days (the longest range) | 1.7 s | 0.9 s |
+| Case list, page 5 001 (OFFSET 100 000) | 50 ms | 50 ms |
+| Audit log, 93 days, first page and total | 30 ms | 30 ms |
+
+- **Case search:** trigram indexes on the code and note
+  ([`V9`](backend/core-service/src/main/resources/db/migration/V9__case_search_trigram.sql)). A test checks that the
+  query can use them.
+- **Dashboard:**
+  - each row is checked against the small set of studies of deleted cases, instead of being joined with every study
+    and case;
+  - the job and review indexes cover the columns the figures need
+    ([`V10`](backend/core-service/src/main/resources/db/migration/V10__dashboard_indexes.sql));
+  - PostgreSQL runs with `random_page_cost=1.1`, the usual value for SSD storage.
+- **Left as is:**
+  - offset paging, still about 50 ms on page 5 001;
+  - the audit log, already partitioned by month with indexes;
+  - a search word found in a third of all cases, which still counts every match (about 110 ms).
+- **Next step if the data grows tenfold:** the 366-day dashboard is mostly percentiles and per-day totals over every
+  job of the year. A daily summary table would remove that work.
 
 ## Administration and security
 
