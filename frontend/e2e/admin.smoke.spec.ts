@@ -71,6 +71,9 @@ function dashboard(): Json {
     failedJobs: i % 10 === 0 ? 1 : 0,
   }));
   return {
+    from: day(-29),
+    to: day(0),
+    zone: 'Asia/Ho_Chi_Minh',
     totals: {
       cases: 42,
       studies: 51,
@@ -81,15 +84,30 @@ function dashboard(): Json {
     },
     processing: {
       perModel: [
-        { modelCode: 'cxr-multilabel', jobs: 1100, avgMs: 2150, p50Ms: 1800, p95Ms: 5400 },
-        { modelCode: 'ct-totalseg', jobs: 134, avgMs: 95_000, p50Ms: 90_000, p95Ms: 130_000 },
+        {
+          modelCode: 'cxr-multilabel',
+          jobs: 1100,
+          avgMs: 2150,
+          p50Ms: 1800,
+          p95Ms: 5400,
+          avgInferenceMs: 640,
+        },
+        {
+          modelCode: 'ct-totalseg',
+          jobs: 134,
+          avgMs: 95_000,
+          p50Ms: 90_000,
+          p95Ms: 130_000,
+          avgInferenceMs: 71_000,
+        },
       ],
     },
     review: { reviewed: 40, accepted: 25, edited: 5, rejected: 10, acceptanceRate: 0.75 },
     labels: [
       { label: 'Cardiomegaly', accepted: 14 },
       { label: 'Effusion', accepted: 9 },
-      { label: 'Liver', accepted: 6 },
+      // Raw model label codes, as core-service sends them.
+      { label: 'kidney_left', accepted: 6 },
     ],
     daily,
     recentJobs: [
@@ -313,6 +331,7 @@ test('admin creates a user who must change the temporary password, then locks th
   ).toBeVisible();
   await expect(page.getByTestId('daily-chart').locator('.recharts-line')).toHaveCount(3);
   await expect(page.getByTestId('label-chart').locator('.recharts-bar-rectangle')).toHaveCount(3);
+  await expect(page.getByTestId('label-chart').getByText('Left kidney')).toBeVisible();
   await page.screenshot({ path: path.join(SCREENSHOTS, 'dashboard.png'), fullPage: true });
 
   // ---- create a user: the temporary password is shown once ----
