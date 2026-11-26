@@ -59,6 +59,9 @@ export async function upload(
   ready: string,
 ) {
   await page.goto(`/upload?caseId=${caseId}`);
+  // Step 1 shows the case chosen from the address; step 2 takes the file.
+  await expect(page.getByText(/^Selected case: /)).toBeVisible();
+  await page.getByRole('button', { name: 'Next' }).click();
   await page.locator('input[type=file]').setInputFiles(file);
   await expect(page.getByTestId('picked-file')).toContainText(file.name);
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
