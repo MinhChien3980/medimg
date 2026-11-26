@@ -1,6 +1,12 @@
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 import { describe, expect, it } from 'vitest';
-import { errorMessage, isPasswordChangeRequired, parseBlobBody, toAppError } from './problem';
+import {
+  errorMessage,
+  hasProblemType,
+  isPasswordChangeRequired,
+  parseBlobBody,
+  toAppError,
+} from './problem';
 
 function axiosErrorWith(status: number, data: unknown): AxiosError {
   const response = {
@@ -25,10 +31,27 @@ describe('toAppError', () => {
     );
     expect(e).toEqual({
       status: 400,
+      type: null,
       title: 'Bad Request',
       detail: 'Validation failed',
       fieldErrors: [{ field: 'birthYear', message: 'must be ≥ 1900' }],
+      properties: { errors: { birthYear: 'must be ≥ 1900' } },
     });
+  });
+
+  it('keeps the problem type and the extension properties, without the standard members', () => {
+    const e = toAppError(
+      axiosErrorWith(422, {
+        type: 'https://medimg.dev/problems/password-policy',
+        title: 'Unprocessable Entity',
+        status: 422,
+        detail: 'The new password does not meet the policy',
+        instance: '/api/v1/me/password',
+        violations: ['TOO_SHORT', 'NO_DIGIT'],
+      }),
+    );
+    expect(e.type).toBe('https://medimg.dev/problems/password-policy');
+    expect(e.properties).toEqual({ violations: ['TOO_SHORT', 'NO_DIGIT'] });
   });
 
   it('accepts array-shaped field errors', () => {
@@ -43,6 +66,33 @@ describe('toAppError', () => {
     expect(toAppError(axiosErrorWith(502, '<html>')).detail).toBe('Request failed');
     expect(toAppError(new Error('boom')).detail).toBe('boom');
     expect(toAppError('weird', 'fallback').detail).toBe('fallback');
+    for (const e of [toAppError(axiosErrorWith(502, '<html>')), toAppError(new Error('boom'))]) {
+      expect(e.type).toBeNull();
+      expect(e.properties).toEqual({});
+    }
+  });
+});
+
+describe('hasProblemType', () => {
+  const problem = (type: unknown) => axiosErrorWith(422, { status: 422, detail: 'x', type });
+
+  it('matches the last path segment of the type, whatever the base URI', () => {
+    const slug = 'wrong-current-password';
+    expect(
+      hasProblemType(problem('https://medimg.dev/problems/wrong-current-password'), slug),
+    ).toBe(true);
+    expect(hasProblemType(problem('/problems/wrong-current-password'), slug)).toBe(true);
+    expect(hasProblemType(problem('wrong-current-password'), slug)).toBe(true);
+  });
+
+  it('rejects other types, a missing type and anything that is not a problem', () => {
+    const slug = 'password-policy';
+    expect(hasProblemType(problem('/problems/not-password-policy'), slug)).toBe(false);
+    expect(hasProblemType(problem('/problems/password-policy-x'), slug)).toBe(false);
+    expect(hasProblemType(problem(undefined), slug)).toBe(false);
+    expect(hasProblemType(problem(42), slug)).toBe(false);
+    expect(hasProblemType(new Error('/problems/password-policy'), slug)).toBe(false);
+    expect(hasProblemType(null, slug)).toBe(false);
   });
 });
 
