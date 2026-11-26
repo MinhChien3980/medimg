@@ -20,7 +20,7 @@ import com.tngtech.archunit.lang.CompositeArchRule;
 class ModuleBoundariesTest {
 
     private static final List<String> MODULES = List.of("identity", "patient", "imaging", "annotation", "prediction",
-            "report", "sample", "audit");
+            "report", "sample", "audit", "dashboard");
 
     /** Other modules may only use a module's {@code application} package (services, ports, DTOs). */
     @ArchTest
@@ -55,6 +55,21 @@ class ModuleBoundariesTest {
     static final ArchRule onlyTheOutboxRelayPublishesToStreams = noClasses()
             .that().resideOutsideOfPackages("com.medimg.shared.outbox..", "com.medimg.shared.messaging..")
             .should().dependOnClassesThat().areAssignableTo(StreamPublisher.class);
+
+    /**
+     * The dashboard is a read model: it aggregates the tables of the other modules in SQL and uses none of their
+     * classes, so that no module depends on it nor it on them.
+     */
+    @ArchTest
+    static final ArchRule dashboardUsesNoOtherModule = noClasses()
+            .that().resideInAPackage("com.medimg.dashboard..")
+            .should().dependOnClassesThat().resideInAnyPackage(MODULES.stream().filter(m -> !m.equals("dashboard"))
+                    .map(m -> "com.medimg." + m + "..").toArray(String[]::new));
+
+    @ArchTest
+    static final ArchRule nobodyDependsOnTheDashboard = noClasses()
+            .that().resideOutsideOfPackage("com.medimg.dashboard..")
+            .should().dependOnClassesThat().resideInAPackage("com.medimg.dashboard..");
 
     @ArchTest
     static final ArchRule noCyclesBetweenModules = slices().matching("com.medimg.(*)..").should().beFreeOfCycles();
