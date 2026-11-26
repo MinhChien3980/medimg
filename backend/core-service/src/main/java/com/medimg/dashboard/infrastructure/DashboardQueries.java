@@ -31,8 +31,14 @@ import com.medimg.dashboard.domain.DateRange;
 @Repository
 public class DashboardQueries {
 
-    /** Studies of cases that are not deleted. */
-    private static final String LIVE_STUDY = "JOIN study s ON s.id = %s JOIN patient p ON p.id = s.patient_id AND p.deleted_at IS NULL";
+    /**
+     * The row's study does not belong to a deleted case. The studies of deleted cases are few (partial index, V10):
+     * PostgreSQL hashes them once and checks every row against that set, instead of joining every row with its study
+     * and case. NOT IN is safe here because study.id is never null.
+     */
+    private static final String OF_LIVE_CASE = """
+            %s NOT IN (SELECT ds.id FROM study ds JOIN patient dp ON dp.id = ds.patient_id
+                       WHERE dp.deleted_at IS NOT NULL)""";
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -60,30 +66,32 @@ public class DashboardQueries {
     public Map<String, Long> studiesByInputType(MapSqlParameterSource p) {
         return counts("""
                 SELECT s.input_type, count(*) FROM study s
-                JOIN patient p ON p.id = s.patient_id AND p.deleted_at IS NULL
-                WHERE s.created_at >= :start AND s.created_at < :end
+                WHERE s.patient_id NOT IN (SELECT dp.id FROM patient dp WHERE dp.deleted_at IS NOT NULL)
+                  AND s.created_at >= :start AND s.created_at < :end
                 GROUP BY 1 ORDER BY 1
                 """, p);
     }
 
     public Map<String, Long> jobsByStatus(MapSqlParameterSource p) {
-        return counts("SELECT j.status, count(*) FROM prediction_job j " + LIVE_STUDY.formatted("j.study_id") + """
-                 WHERE j.queued_at >= :start AND j.queued_at < :end
+        return counts("SELECT j.status, count(*) FROM prediction_job j WHERE "
+                + OF_LIVE_CASE.formatted("j.study_id") + """
+                   AND j.queued_at >= :start AND j.queued_at < :end
                 GROUP BY 1 ORDER BY 1
                 """, p);
     }
 
     public Map<String, Long> reportsByStatus(MapSqlParameterSource p) {
-        return counts("SELECT r.status, count(*) FROM report r " + LIVE_STUDY.formatted("r.study_id") + """
-                 WHERE r.created_at >= :start AND r.created_at < :end
+        return counts("SELECT r.status, count(*) FROM report r WHERE " + OF_LIVE_CASE.formatted("r.study_id") + """
+                   AND r.created_at >= :start AND r.created_at < :end
                 GROUP BY 1 ORDER BY 1
                 """, p);
     }
 
     /** AI findings reviewed in the range, by review status (ACCEPTED, EDITED, REJECTED). */
     public Map<String, Long> reviewsByStatus(MapSqlParameterSource p) {
-        return counts("SELECT f.review_status, count(*) FROM finding f " + LIVE_STUDY.formatted("f.study_id") + """
-                 WHERE f.source = 'AI' AND f.reviewed_at >= :start AND f.reviewed_at < :end
+        return counts("SELECT f.review_status, count(*) FROM finding f WHERE "
+                + OF_LIVE_CASE.formatted("f.study_id") + """
+                   AND f.source = 'AI' AND f.reviewed_at >= :start AND f.reviewed_at < :end
                   AND f.review_status <> 'PENDING'
                 GROUP BY 1 ORDER BY 1
                 """, p);
@@ -91,9 +99,9 @@ public class DashboardQueries {
 
     /** The ten labels most often accepted or edited, the corrected label counting for an EDITED finding. */
     public List<LabelCount> topLabels(MapSqlParameterSource p) {
-        return jdbc.query("SELECT coalesce(f.review_label, f.label) AS label, count(*) AS n FROM finding f "
-                + LIVE_STUDY.formatted("f.study_id") + """
-                 WHERE f.source = 'AI' AND f.reviewed_at >= :start AND f.reviewed_at < :end
+        return jdbc.query("SELECT coalesce(f.review_label, f.label) AS label, count(*) AS n FROM finding f WHERE "
+                + OF_LIVE_CASE.formatted("f.study_id") + """
+                   AND f.source = 'AI' AND f.reviewed_at >= :start AND f.reviewed_at < :end
                   AND f.review_status IN ('ACCEPTED', 'EDITED')
                 GROUP BY 1 ORDER BY n DESC, label LIMIT 10
                 """, p, (rs, i) -> new LabelCount(rs.getString("label"), rs.getLong("n")));
@@ -110,8 +118,8 @@ public class DashboardQueries {
                        avg(r.inference_ms)                                AS avg_inference_ms
                 FROM (SELECT j.id, j.model_id, extract(EPOCH FROM (j.finished_at - j.queued_at)) * 1000 AS ms
                       FROM prediction_job j
-                """ + LIVE_STUDY.formatted("j.study_id") + """
-                       WHERE j.status = 'DONE' AND j.finished_at IS NOT NULL
+                """ + " WHERE " + OF_LIVE_CASE.formatted("j.study_id") + """
+                         AND j.status = 'DONE' AND j.finished_at IS NOT NULL
                         AND j.queued_at >= :start AND j.queued_at < :end) d
                          JOIN ai_model m ON m.id = d.model_id
                          LEFT JOIN prediction_result r ON r.job_id = d.id
@@ -132,8 +140,8 @@ public class DashboardQueries {
                      jobs AS (SELECT CAST(j.queued_at AT TIME ZONE :zone AS date) AS day, count(*) AS n,
                                      count(*) FILTER (WHERE j.status = 'FAILED') AS failed
                               FROM prediction_job j
-                """ + LIVE_STUDY.formatted("j.study_id") + """
-                               WHERE j.queued_at >= :start AND j.queued_at < :end
+                """ + " WHERE " + OF_LIVE_CASE.formatted("j.study_id") + """
+                                 AND j.queued_at >= :start AND j.queued_at < :end
                               GROUP BY 1)
                 SELECT days.day, coalesce(cases.n, 0) AS cases, coalesce(jobs.n, 0) AS jobs,
                        coalesce(jobs.failed, 0) AS failed
@@ -151,8 +159,8 @@ public class DashboardQueries {
                 SELECT j.id, j.study_id, m.code, j.status, j.queued_at, j.finished_at
                 FROM prediction_job j
                          JOIN ai_model m ON m.id = j.model_id
-                """ + LIVE_STUDY.formatted("j.study_id") + """
-                 WHERE j.queued_at >= :start AND j.queued_at < :end
+                """ + " WHERE " + OF_LIVE_CASE.formatted("j.study_id") + """
+                   AND j.queued_at >= :start AND j.queued_at < :end
                 ORDER BY j.queued_at DESC, j.id
                 LIMIT 10
                 """, p, (rs, i) -> new RecentJob(rs.getObject("id", UUID.class), rs.getObject("study_id", UUID.class),
