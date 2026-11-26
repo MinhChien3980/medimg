@@ -857,6 +857,8 @@ export const en: Messages = {
       statuses: {
         ACTIVE: 'Active',
         DISABLED: 'Disabled',
+        STAGING: 'Staging',
+        RETIRED: 'Retired',
       },
       tasks: {
         CLASSIFICATION_2D: 'Classification (2D)',
@@ -874,6 +876,10 @@ export const en: Messages = {
         p95: 'p95 inference',
         lastUsed: 'Last used',
         actions: 'Actions',
+      },
+      noSwitch: {
+        STAGING: 'A model in staging is not switched on or off here',
+        RETIRED: 'A retired model cannot be switched on again',
       },
       enable: 'Enable',
       disable: 'Disable',

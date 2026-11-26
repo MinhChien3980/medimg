@@ -738,7 +738,11 @@ export interface TemporaryPasswordResponse {
 
 // ---------- Slice 4a: model administration (ADMIN) ----------
 
-export type ModelStatus = 'ACTIVE' | 'DISABLED';
+/**
+ * Only ACTIVE and DISABLED can be switched (`POST /admin/models/{id}/enable|disable`); a model in
+ * STAGING or RETIRED is listed but the server refuses to switch it (409 `…/model-status`).
+ */
+export type ModelStatus = 'ACTIVE' | 'DISABLED' | 'STAGING' | 'RETIRED';
 
 export interface ModelStatsDto {
   jobs: number;

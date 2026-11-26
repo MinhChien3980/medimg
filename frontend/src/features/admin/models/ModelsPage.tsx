@@ -1,6 +1,6 @@
 import { PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,9 +14,32 @@ import { formatDateTime, formatDurationMs, formatNumber } from '@/shared/lib/for
 
 type Pending = { model: AdminModelDto; enable: boolean };
 
+const STATUS_COLORS: Record<ModelStatus, string> = {
+  ACTIVE: 'green',
+  DISABLED: 'default',
+  STAGING: 'gold',
+  RETIRED: 'default',
+};
+
+/** A muted dash for a model the server does not switch, with the reason for every user. */
+function NoSwitch({ reason }: { reason: string }) {
+  return (
+    <Tooltip title={reason}>
+      {/* Focusable, so the tooltip also opens from the keyboard. */}
+      <span tabIndex={0}>
+        <Typography.Text type="secondary" aria-hidden>
+          —
+        </Typography.Text>
+        <span className="sr-only">{reason}</span>
+      </span>
+    </Tooltip>
+  );
+}
+
 /**
  * `/admin/models` (ADMIN): every model with its job statistics; enable / disable after a
- * confirmation. A disabled model disappears from `GET /models`, hence from the AI panel.
+ * confirmation. A disabled model disappears from `GET /models`, hence from the AI panel. Models in
+ * staging or retired are listed but cannot be switched here.
  */
 export default function ModelsPage() {
   const { t, i18n } = useTranslation();
@@ -91,7 +114,7 @@ export default function ModelsPage() {
       title: t('admin.models.columns.status'),
       dataIndex: 'status',
       render: (s: ModelStatus) => (
-        <Tag color={s === 'ACTIVE' ? 'green' : 'default'}>{t(`admin.models.statuses.${s}`)}</Tag>
+        <Tag color={STATUS_COLORS[s]}>{t(`admin.models.statuses.${s}`)}</Tag>
       ),
     },
     {
@@ -137,8 +160,10 @@ export default function ModelsPage() {
     {
       title: t('admin.models.columns.actions'),
       key: 'actions',
-      render: (_: unknown, m) =>
-        m.status === 'ACTIVE' ? (
+      render: (_: unknown, m) => {
+        if (m.status === 'STAGING') return <NoSwitch reason={t('admin.models.noSwitch.STAGING')} />;
+        if (m.status === 'RETIRED') return <NoSwitch reason={t('admin.models.noSwitch.RETIRED')} />;
+        return m.status === 'ACTIVE' ? (
           <Button
             size="small"
             danger
@@ -155,7 +180,8 @@ export default function ModelsPage() {
           >
             {t('admin.models.enable')}
           </Button>
-        ),
+        );
+      },
     },
   ];
 

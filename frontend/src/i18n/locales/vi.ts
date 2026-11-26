@@ -852,6 +852,8 @@ export const vi = {
       statuses: {
         ACTIVE: 'Đang bật',
         DISABLED: 'Đã tắt',
+        STAGING: 'Đang thử nghiệm',
+        RETIRED: 'Đã ngừng dùng',
       },
       tasks: {
         CLASSIFICATION_2D: 'Phân loại (2D)',
@@ -869,6 +871,10 @@ export const vi = {
         p95: 'Suy luận p95',
         lastUsed: 'Dùng gần nhất',
         actions: 'Thao tác',
+      },
+      noSwitch: {
+        STAGING: 'Mô hình đang thử nghiệm không bật/tắt được ở đây',
+        RETIRED: 'Mô hình đã ngừng dùng không bật lại được',
       },
       enable: 'Bật',
       disable: 'Tắt',

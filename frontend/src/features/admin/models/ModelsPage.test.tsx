@@ -114,6 +114,38 @@ describe('ModelsPage', () => {
     expect(calls).toEqual([`${segModel.id}/enable`]);
   });
 
+  it('offers no switch for a model in staging or retired, and says why', async () => {
+    const user = userEvent.setup();
+    const staging = adminModel({ id: 'm-staging', name: 'CXR next', status: 'STAGING' });
+    const retired = adminModel({ id: 'm-retired', name: 'CXR legacy', status: 'RETIRED' });
+    const calls = modelsBackend([staging, retired, adminModel()]);
+    renderModels();
+
+    const stagingRow = await rowOf('CXR next');
+    expect(within(stagingRow).getByText('Staging')).toBeInTheDocument();
+    expect(within(stagingRow).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(stagingRow).getByText('—')).toHaveAttribute('aria-hidden', 'true');
+    const stagingReason = 'A model in staging is not switched on or off here';
+    expect(within(stagingRow).getByText(stagingReason)).toHaveClass('sr-only');
+
+    const retiredRow = await rowOf('CXR legacy');
+    expect(within(retiredRow).getByText('Retired')).toBeInTheDocument();
+    expect(within(retiredRow).queryByRole('button')).not.toBeInTheDocument();
+    expect(
+      within(retiredRow).getByText('A retired model cannot be switched on again'),
+    ).toBeInTheDocument();
+
+    // The same reason as a tooltip for sighted users, by pointer or keyboard.
+    await user.hover(within(stagingRow).getByText('—'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(stagingReason);
+
+    // The active model next to them keeps its switch.
+    expect(
+      within(await rowOf(model.name)).getByRole('button', { name: 'Disable' }),
+    ).toBeInTheDocument();
+    expect(calls).toEqual([]);
+  });
+
   it('does nothing when the confirmation is cancelled', async () => {
     const user = userEvent.setup();
     const calls = modelsBackend([adminModel()]);
