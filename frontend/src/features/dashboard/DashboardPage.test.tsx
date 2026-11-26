@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http as mock, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DashboardDto } from '@/api/types';
 import { useAuthStore } from '@/features/auth/authStore';
 import i18n from '@/i18n';
@@ -39,6 +39,21 @@ function card(title: string): HTMLElement {
   const statistic = heading.closest<HTMLElement>('.ant-card');
   if (!statistic) throw new Error(`no card ${title}`);
   return statistic;
+}
+
+/**
+ * jsdom lays nothing out, so Recharts' responsive containers measure 0 × 0 and draw no chart. Gives
+ * them a size, so the axes are drawn (`restoreMocks` undoes it after each test).
+ */
+function chartsHaveRoom() {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    // Anything else keeps jsdom's empty box.
+    return this.classList.contains('recharts-responsive-container')
+      ? new DOMRect(0, 0, 640, 280)
+      : new DOMRect();
+  });
 }
 
 describe('DashboardPage', () => {
@@ -179,6 +194,31 @@ describe('DashboardPage', () => {
     const labels = screen.getByRole('table', { name: 'Accepted AI findings by label (table)' });
     expect(within(labels).getByRole('rowheader', { name: 'Cardiomegaly' })).toBeInTheDocument();
     expect(within(labels).getByText('14')).toBeInTheDocument();
+  });
+
+  it('names the labels for people: CT structures translated, chest X-ray labels as they are', async () => {
+    chartsHaveRoom();
+    dashboardEndpoint(() =>
+      dashboard({
+        labels: [
+          { label: 'Cardiomegaly', accepted: 14 },
+          { label: 'kidney_left', accepted: 6 },
+        ],
+      }),
+    );
+    renderDashboard();
+
+    const chart = await screen.findByTestId('label-chart');
+    expect(await within(chart).findByText('Left kidney')).toBeInTheDocument();
+    expect(within(chart).getByText('Cardiomegaly')).toBeInTheDocument();
+    expect(within(chart).queryByText('kidney_left')).not.toBeInTheDocument();
+    const table = screen.getByRole('table', { name: 'Accepted AI findings by label (table)' });
+    expect(within(table).getByRole('rowheader', { name: 'Left kidney' })).toBeInTheDocument();
+    expect(within(table).getByRole('rowheader', { name: 'Cardiomegaly' })).toBeInTheDocument();
+    expect(within(table).queryByText('kidney_left')).not.toBeInTheDocument();
+
+    await i18n.changeLanguage('vi');
+    expect(await within(table).findByRole('rowheader', { name: 'Thận trái' })).toBeInTheDocument();
   });
 
   it('shows processing times per model, the review split and the breakdowns', async () => {

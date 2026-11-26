@@ -3,6 +3,7 @@
  * Recharts stays out of the initial bundle. Each chart has a visually hidden table with the same
  * numbers for screen readers.
  */
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Bar,
@@ -18,6 +19,7 @@ import {
   YAxis,
 } from 'recharts';
 import type { DashboardDay } from '@/api/types';
+import { useStructureName } from '@/features/ai/structureNames';
 import { formatDay, formatNumber } from '@/shared/lib/format';
 
 /** Categorical slots 1 and 2 of the chart palette, and a dark critical red for failures. */
@@ -110,11 +112,20 @@ interface LabelChartProps {
   labels: Array<{ label: string; accepted: number }>;
 }
 
+/**
+ * The labels are the models' raw codes (`kidney_left`, `Cardiomegaly`): shown by their name, as in
+ * the AI panel, in the chart and in its table.
+ */
 export function LabelChart({ labels }: LabelChartProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
+  const structureName = useStructureName();
   const title = t('dashboard.labels.title');
   const height = Math.max(120, labels.length * 32 + 24);
+  const rows = useMemo(
+    () => labels.map((l) => ({ ...l, name: structureName(l.label) })),
+    [labels, structureName],
+  );
   return (
     <figure className="dashboard-chart" aria-label={title}>
       <div aria-hidden data-testid="label-chart">
@@ -124,12 +135,12 @@ export function LabelChart({ labels }: LabelChartProps) {
           initialDimension={{ width: INITIAL.width, height }}
         >
           <BarChart
-            data={labels}
+            data={rows}
             layout="vertical"
             margin={{ top: 0, right: 40, bottom: 0, left: 0 }}
           >
             <XAxis type="number" hide allowDecimals={false} />
-            <YAxis type="category" dataKey="label" width={130} tickLine={false} {...AXIS} />
+            <YAxis type="category" dataKey="name" width={130} tickLine={false} {...AXIS} />
             <Tooltip formatter={(value) => formatNumber(Number(value), lang)} />
             <Bar
               dataKey="accepted"
@@ -159,9 +170,9 @@ export function LabelChart({ labels }: LabelChartProps) {
           </tr>
         </thead>
         <tbody>
-          {labels.map((l) => (
+          {rows.map((l) => (
             <tr key={l.label}>
-              <th scope="row">{l.label}</th>
+              <th scope="row">{l.name}</th>
               <td>{formatNumber(l.accepted, lang)}</td>
             </tr>
           ))}
