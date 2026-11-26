@@ -15,6 +15,7 @@
     "typecheck": "node node_modules/typescript/bin/tsc -b --noEmit",
     "test": "node node_modules/vitest/vitest.mjs",
     "e2e": "node node_modules/@playwright/test/cli.js test",
+    "e2e:stack": "node node_modules/@playwright/test/cli.js test --config playwright.stack.config.ts",
     "e2e:install": "node node_modules/@playwright/test/cli.js install chromium"
   },
   "dependencies": {
