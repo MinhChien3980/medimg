@@ -76,6 +76,28 @@ async function fill(current: string, next: string, confirm = next) {
   return user;
 }
 
+/** A 422 ProblemDetail of type `https://medimg.dev/problems/<slug>`, as core-service sends it. */
+function problem422(slug: string, detail: string, extensions: Record<string, unknown> = {}) {
+  return HttpResponse.json(
+    {
+      type: `https://medimg.dev/problems/${slug}`,
+      title: 'Unprocessable Entity',
+      status: 422,
+      detail,
+      instance: '/api/v1/me/password',
+      ...extensions,
+    },
+    { status: 422 },
+  );
+}
+
+/** The form item (label, input and its messages) of the field labelled `label`. */
+function formItemOf(label: string): HTMLElement {
+  const item = screen.getByLabelText(label).closest<HTMLElement>('.ant-form-item');
+  if (!item) throw new Error(`no form item for ${label}`);
+  return item;
+}
+
 function signIn(passwordChangeRequired: boolean) {
   useAuthStore.getState().setSession(tokens('acc', 'ref', { ...doctor, passwordChangeRequired }));
 }
@@ -127,6 +149,16 @@ describe('ChangePasswordPage', () => {
     await user.type(next, 'Demo@12345');
     expect(await screen.findByText('Must differ from the current password')).toBeInTheDocument();
 
+    // 25 characters but 73 bytes in UTF-8: over BCrypt's limit.
+    await user.clear(next);
+    await user.click(next);
+    await user.paste(`${'ậ'.repeat(24)}1`);
+    expect(
+      await within(formItemOf('New password')).findByText(
+        'Too long: at most 72 bytes (accented letters and emoji count 2 to 4)',
+      ),
+    ).toBeInTheDocument();
+
     await user.clear(next);
     await user.type(next, NEW_PASSWORD);
     await user.type(screen.getByLabelText('Repeat the new password'), `${NEW_PASSWORD}!`);
@@ -148,19 +180,63 @@ describe('ChangePasswordPage', () => {
 
   it('shows a wrong current password (422) on its field and keeps the session', async () => {
     signIn(false);
-    passwordEndpoint(() =>
-      HttpResponse.json(
-        { status: 422, title: 'Unprocessable', detail: 'Current password is wrong' },
-        { status: 422 },
-      ),
-    );
+    passwordEndpoint(() => problem422('wrong-current-password', 'The current password is wrong'));
     renderAt('/account/password');
     const user = await fill('wrong-password', NEW_PASSWORD);
     await user.click(screen.getByRole('button', { name: 'Change password' }));
 
-    expect(await screen.findByText('The current password is not correct')).toBeInTheDocument();
+    expect(
+      await within(formItemOf('Current password')).findByText(
+        'The current password is not correct',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('The current password is wrong')).not.toBeInTheDocument();
     expect(useAuthStore.getState().accessToken).toBe('acc');
     expect(screen.queryByText('login page')).not.toBeInTheDocument();
+  });
+
+  it('shows the rules the server refused (422 password-policy) on the new password', async () => {
+    signIn(false);
+    passwordEndpoint(() =>
+      problem422('password-policy', 'The new password does not meet the policy', {
+        violations: ['NO_DIGIT', 'SAME_AS_CURRENT', 'SOMETHING_NEW'],
+      }),
+    );
+    renderAt('/account/password');
+    const user = await fill('Demo@12345', NEW_PASSWORD);
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+
+    const field = formItemOf('New password');
+    expect(await within(field).findByText('Add at least one digit')).toBeInTheDocument();
+    expect(within(field).getByText('Must differ from the current password')).toBeInTheDocument();
+    // Not mistaken for a wrong current password, and not repeated above the form.
+    expect(screen.queryByText('The current password is not correct')).not.toBeInTheDocument();
+    expect(screen.queryByText('The new password does not meet the policy')).not.toBeInTheDocument();
+  });
+
+  it('shows a 422 it cannot place on a field above the form', async () => {
+    signIn(false);
+    passwordEndpoint(() => problem422('account-busy', 'Try again in a minute'));
+    renderAt('/account/password');
+    const user = await fill('Demo@12345', NEW_PASSWORD);
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+
+    expect(await screen.findByText('Try again in a minute')).toBeInTheDocument();
+    expect(screen.queryByText('The current password is not correct')).not.toBeInTheDocument();
+  });
+
+  it('shows a policy refusal without any known rule above the form', async () => {
+    signIn(false);
+    passwordEndpoint(() =>
+      problem422('password-policy', 'The new password is too common', {
+        violations: ['TOO_COMMON'],
+      }),
+    );
+    renderAt('/account/password');
+    const user = await fill('Demo@12345', NEW_PASSWORD);
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+
+    expect(await screen.findByText('The new password is too common')).toBeInTheDocument();
   });
 
   it('puts server field errors on their field', async () => {
@@ -254,7 +330,7 @@ describe('ChangePasswordPage', () => {
 
     it('stays forced when the change fails', async () => {
       signIn(true);
-      passwordEndpoint(() => HttpResponse.json({ status: 422, detail: 'wrong' }, { status: 422 }));
+      passwordEndpoint(() => problem422('wrong-current-password', 'wrong'));
       const router = renderAt('/dashboard');
       const user = await fill('bad', NEW_PASSWORD);
       await user.click(screen.getByRole('button', { name: 'Change password' }));
@@ -290,6 +366,7 @@ describe('ChangePasswordPage', () => {
     const policy = document.getElementById('password-policy');
     expect(policy).not.toBeNull();
     expect(within(policy as HTMLElement).getByText(/at least 10 characters/)).toBeInTheDocument();
+    expect(within(policy as HTMLElement).getByText(/at most 72 bytes/)).toBeInTheDocument();
     expect(screen.getByLabelText('New password')).toHaveAttribute(
       'aria-describedby',
       'password-policy',

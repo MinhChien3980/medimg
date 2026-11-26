@@ -672,12 +672,14 @@ export const en: Messages = {
     policyTitle: 'The new password must',
     policy: {
       length: 'be at least 10 characters long',
+      maxBytes: 'be at most 72 bytes long (accented letters and emoji count 2 to 4)',
       letterDigit: 'contain letters and digits',
       differs: 'differ from the current password',
       username: 'not contain your username',
     },
     errors: {
       length: 'Use at least 10 characters',
+      tooLong: 'Too long: at most 72 bytes (accented letters and emoji count 2 to 4)',
       letter: 'Add at least one letter',
       digit: 'Add at least one digit',
       same: 'Must differ from the current password',

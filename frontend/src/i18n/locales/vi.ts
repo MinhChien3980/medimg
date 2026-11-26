@@ -667,12 +667,14 @@ export const vi = {
     policyTitle: 'Mật khẩu mới phải',
     policy: {
       length: 'dài ít nhất 10 ký tự',
+      maxBytes: 'dài tối đa 72 byte (chữ có dấu và emoji tính 2 đến 4 byte)',
       letterDigit: 'có cả chữ và số',
       differs: 'khác mật khẩu hiện tại',
       username: 'không chứa tên đăng nhập của bạn',
     },
     errors: {
       length: 'Dùng ít nhất 10 ký tự',
+      tooLong: 'Quá dài: tối đa 72 byte (chữ có dấu và emoji tính 2 đến 4 byte)',
       letter: 'Thêm ít nhất một chữ cái',
       digit: 'Thêm ít nhất một chữ số',
       same: 'Phải khác mật khẩu hiện tại',

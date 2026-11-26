@@ -6,12 +6,12 @@ import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router';
 import { accountApi } from '@/api/endpoints';
 import { refreshAccessToken, SessionExpiredError } from '@/api/http';
-import { toAppError } from '@/api/problem';
+import { hasProblemType, toAppError } from '@/api/problem';
 import { selectPasswordChangeRequired, useAuthStore } from '@/features/auth/authStore';
 import { returnTarget } from '@/features/auth/redirects';
 import { ProblemAlert } from '@/shared/components/ProblemAlert';
 import { serverFieldErrors } from '@/shared/lib/formErrors';
-import { passwordViolations, type PasswordViolation } from './passwordPolicy';
+import { passwordViolations, violationsFromServer, type PasswordViolation } from './passwordPolicy';
 
 interface PasswordForm {
   currentPassword: string;
@@ -20,6 +20,12 @@ interface PasswordForm {
 }
 
 const FIELDS = ['currentPassword', 'newPassword'] as const;
+
+/** Problem types of a refused `POST /me/password` (both 422; a 401 would end the session). */
+const WRONG_CURRENT_PASSWORD = 'wrong-current-password';
+const PASSWORD_POLICY = 'password-policy';
+
+type FieldErrors = Array<{ name: keyof PasswordForm; errors: string[] }>;
 
 /**
  * `/account/password`. Reached from the account menu, or forced: while the user must replace a
@@ -44,6 +50,26 @@ export default function ChangePasswordPage() {
       }),
   });
 
+  /**
+   * Where a refusal belongs: the server's field errors on their field, a wrong current password on
+   * that field, the broken policy rules (`violations`) on the new password. Nothing (empty) for
+   * anything else, which is shown above the form.
+   */
+  const fieldErrorsOf = (error: unknown): FieldErrors => {
+    const fields = serverFieldErrors(error, FIELDS);
+    if (fields.length > 0) return fields;
+    if (hasProblemType(error, WRONG_CURRENT_PASSWORD)) {
+      return [{ name: 'currentPassword', errors: [t('account.wrongCurrent')] }];
+    }
+    if (hasProblemType(error, PASSWORD_POLICY)) {
+      const broken = violationsFromServer(toAppError(error).properties.violations);
+      if (broken.length > 0) {
+        return [{ name: 'newPassword', errors: broken.map((v) => t(`account.errors.${v}`)) }];
+      }
+    }
+    return [];
+  };
+
   const onFinish = (values: PasswordForm) => {
     const wasForced = forced;
     const afterChange = async () => {
@@ -66,13 +92,8 @@ export default function ChangePasswordPage() {
     change.mutate(values, {
       onSuccess: () => void afterChange(),
       onError: (error) => {
-        const fields = serverFieldErrors(error, FIELDS);
-        if (fields.length > 0) {
-          form.setFields(fields);
-        } else if (toAppError(error).status === 422) {
-          // core-service answers a wrong current password with a 422 (a 401 would log out).
-          form.setFields([{ name: 'currentPassword', errors: [t('account.wrongCurrent')] }]);
-        }
+        const fields = fieldErrorsOf(error);
+        if (fields.length > 0) form.setFields(fields);
       },
     });
   };
@@ -87,11 +108,8 @@ export default function ChangePasswordPage() {
     },
   });
 
-  // Field errors are shown on their field; anything else (5xx, network) above the form.
-  const generalError =
-    change.isError &&
-    serverFieldErrors(change.error, FIELDS).length === 0 &&
-    toAppError(change.error).status !== 422;
+  // Field errors are shown on their field; anything else (5xx, network, other 422) above the form.
+  const generalError = change.isError && fieldErrorsOf(change.error).length === 0;
 
   return (
     <div className="page page--narrow">
@@ -112,7 +130,7 @@ export default function ChangePasswordPage() {
         <div className="password-policy" id="password-policy">
           <Typography.Text strong>{t('account.policyTitle')}</Typography.Text>
           <ul>
-            {(['length', 'letterDigit', 'differs', 'username'] as const).map((rule) => (
+            {(['length', 'maxBytes', 'letterDigit', 'differs', 'username'] as const).map((rule) => (
               <li key={rule}>
                 <CheckOutlined aria-hidden /> {t(`account.policy.${rule}`)}
               </li>
@@ -150,6 +168,7 @@ export default function ChangePasswordPage() {
             rules={[
               { required: true, message: t('account.newRequired') },
               policyRule('length', t('account.errors.length')),
+              policyRule('tooLong', t('account.errors.tooLong')),
               policyRule('letter', t('account.errors.letter')),
               policyRule('digit', t('account.errors.digit')),
               policyRule('same', t('account.errors.same')),
