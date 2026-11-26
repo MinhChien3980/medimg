@@ -5,7 +5,7 @@ import { can, canEditAnnotation, type Permission } from './permissions';
 
 const WRITE: Permission[] = ['createCase', 'upload', 'runAi', 'manageJob'];
 const CLINICAL: Permission[] = ['review', 'annotate', 'report'];
-const ALL: Permission[] = [...WRITE, ...CLINICAL, 'manageSamples', 'viewDraftReport'];
+const ALL: Permission[] = [...WRITE, ...CLINICAL, 'manageSamples', 'viewDraftReport', 'administer'];
 
 function withRoles(...roles: Role[]): UserDto {
   return { ...doctor, roles };
@@ -20,6 +20,13 @@ describe('can', () => {
     expect(can(withRoles('ADMIN'), 'manageSamples')).toBe(true);
     for (const role of ['DOCTOR', 'TECHNICIAN', 'RESEARCHER'] as const) {
       expect(can(withRoles(role), 'manageSamples')).toBe(false);
+    }
+  });
+
+  it('only ADMIN administers users, models and the audit log', () => {
+    expect(can(withRoles('ADMIN'), 'administer')).toBe(true);
+    for (const role of ['DOCTOR', 'TECHNICIAN', 'RESEARCHER'] as const) {
+      expect(can(withRoles(role), 'administer')).toBe(false);
     }
   });
 

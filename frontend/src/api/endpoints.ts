@@ -1,7 +1,13 @@
 import axios from 'axios';
 import { authHttp, http } from './http';
 import type {
+  AdminModelDto,
+  AdminUserDto,
+  AdminUserQuery,
   AnnotationDto,
+  AuditEntryDto,
+  AuditQuery,
+  ChangePasswordRequest,
   CompleteUploadRequest,
   CreateAnnotationRequest,
   CreateFindingRequest,
@@ -9,14 +15,17 @@ import type {
   CreatePredictionRequest,
   CreatePredictionResponse,
   CreateReportRequest,
+  CreateUserRequest,
+  CreateUserResponse,
+  DashboardDto,
   FinalizeReportRequest,
-  RefillReportRequest,
   FindingDto,
   InitKeyImageRequest,
   InitKeyImageResponse,
   InitUploadRequest,
   InitUploadResponse,
   InputType,
+  IsoDate,
   LoginRequest,
   MarkSampleRequest,
   ModelDto,
@@ -25,16 +34,19 @@ import type {
   PatientQuery,
   PdfLinkDto,
   PredictionDto,
+  RefillReportRequest,
   ReportDto,
   ReportSummaryDto,
   ReviewFindingRequest,
   ReviewStatus,
   SampleCaseDto,
   StudyDto,
+  TemporaryPasswordResponse,
   TokenResponse,
   UpdateAnnotationRequest,
   UpdatePatientRequest,
   UpdateReportRequest,
+  UpdateUserRequest,
   UploadDto,
   UserDto,
   Uuid,
@@ -213,4 +225,87 @@ export const reportsApi = {
     http.post<unknown>(`/reports/${id}/key-images/${imageId}/complete`).then(() => undefined),
   removeKeyImage: (id: Uuid, imageId: Uuid) =>
     http.delete<unknown>(`/reports/${id}/key-images/${imageId}`).then(() => undefined),
+};
+
+// ---------- Account (slice 4a) ----------
+
+export const accountApi = {
+  /** 204. Allowed while a password change is required (like `/me` and `/auth/*`). */
+  changePassword: (body: ChangePasswordRequest) =>
+    http.post<void>('/me/password', body).then(() => undefined),
+};
+
+// ---------- Dashboard (slice 4a, every role) ----------
+
+export const dashboardApi = {
+  get: (from: IsoDate, to: IsoDate) =>
+    http.get<DashboardDto>('/dashboard', { params: { from, to } }).then((r) => r.data),
+};
+
+// ---------- Administration (slice 4a, ADMIN) ----------
+
+/** Drops empty filters so they are not sent as `q=`. */
+function filters<T extends object>(query: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  ) as Partial<T>;
+}
+
+export const adminUsersApi = {
+  list: (query: AdminUserQuery) =>
+    http.get<Page<AdminUserDto>>('/admin/users', { params: filters(query) }).then((r) => r.data),
+  create: (body: CreateUserRequest) =>
+    http.post<CreateUserResponse>('/admin/users', body).then((r) => r.data),
+  update: (id: Uuid, body: UpdateUserRequest) =>
+    http.put<AdminUserDto>(`/admin/users/${id}`, body).then((r) => r.data),
+  lock: (id: Uuid) => http.post<AdminUserDto>(`/admin/users/${id}/lock`).then((r) => r.data),
+  unlock: (id: Uuid) => http.post<AdminUserDto>(`/admin/users/${id}/unlock`).then((r) => r.data),
+  resetPassword: (id: Uuid) =>
+    http.post<TemporaryPasswordResponse>(`/admin/users/${id}/reset-password`).then((r) => r.data),
+};
+
+export const adminModelsApi = {
+  list: () => http.get<AdminModelDto[]>('/admin/models').then((r) => r.data),
+  enable: (id: Uuid) => http.post<AdminModelDto>(`/admin/models/${id}/enable`).then((r) => r.data),
+  disable: (id: Uuid) =>
+    http.post<AdminModelDto>(`/admin/models/${id}/disable`).then((r) => r.data),
+};
+
+/** `attachment; filename="audit.csv"` / `filename*=UTF-8''…` → the file name, if any. */
+export function fileNameFromDisposition(header: unknown): string | null {
+  if (typeof header !== 'string') return null;
+  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim().replace(/^"|"$/g, ''));
+    } catch {
+      // malformed escape: fall back to the plain parameter
+    }
+  }
+  const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header);
+  const name = (plain?.[2] ?? plain?.[1])?.trim();
+  return name ? name : null;
+}
+
+export const auditApi = {
+  list: (query: AuditQuery & { page: number; size: number }) =>
+    http.get<Page<AuditEntryDto>>('/admin/audit', { params: filters(query) }).then((r) => r.data),
+  /** Actions that occur in the range (for the filter dropdown). */
+  actions: (from: IsoDate, to: IsoDate) =>
+    http.get<string[]>('/admin/audit/actions', { params: { from, to } }).then((r) => r.data),
+  /**
+   * The CSV (streamed by the server, UTF-8 with BOM) through the authenticated client, as a blob
+   * to save: a plain link could not carry the access token.
+   */
+  exportCsv: (query: AuditQuery) =>
+    http
+      .get<Blob>('/admin/audit/export.csv', {
+        params: filters(query),
+        responseType: 'blob',
+        timeout: 120_000,
+      })
+      .then((r) => ({
+        blob: r.data,
+        fileName: fileNameFromDisposition(r.headers['content-disposition']),
+      })),
 };

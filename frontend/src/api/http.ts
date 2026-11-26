@@ -1,5 +1,6 @@
 import axios, { AxiosHeaders, isAxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '@/features/auth/authStore';
+import { isPasswordChangeRequired, parseBlobBody } from './problem';
 import type { TokenResponse } from './types';
 
 export const API_BASE = '/api/v1';
@@ -85,6 +86,15 @@ http.interceptors.request.use(async (config) => {
 });
 
 http.interceptors.response.use(undefined, async (error: unknown) => {
+  if (isAxiosError(error) && error.response) {
+    // Blob requests (CSV, PDF) get their ProblemDetail as a Blob: parse it, so callers and the
+    // check below see the same JSON as for any other request.
+    error.response.data = await parseBlobBody(error.response.data);
+    if (isPasswordChangeRequired(error.response.status, error.response.data)) {
+      // Whatever the page, the route guard now sends the user to the password page.
+      useAuthStore.getState().requirePasswordChange();
+    }
+  }
   if (!isAxiosError(error) || error.response?.status !== 401 || !error.config) {
     throw error;
   }

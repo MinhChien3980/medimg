@@ -64,3 +64,39 @@ export function errorMessage(error: unknown, fallback?: string): string {
   const fields = e.fieldErrors.map((f) => (f.field ? `${f.field}: ${f.message}` : f.message));
   return fields.length > 0 ? `${e.detail} (${fields.join('; ')})` : e.detail;
 }
+
+/** Last path segment of the ProblemDetail `type` the server uses when a password change is due. */
+export const PASSWORD_CHANGE_REQUIRED = 'password-change-required';
+
+/** The ProblemDetail `type` of a response body, if any. */
+export function problemTypeOf(data: unknown): string | null {
+  return isRecord(data) && typeof data.type === 'string' ? data.type : null;
+}
+
+/**
+ * True for the 403 every API (but `/me`, `/me/password`, `/auth/*`) answers while the user must
+ * change a temporary password. Matched on the end of `type` (`…/password-change-required`), so
+ * the base URI of the problem types may change.
+ */
+export function isPasswordChangeRequired(status: number | undefined, data: unknown): boolean {
+  if (status !== 403) return false;
+  const type = problemTypeOf(data);
+  return (
+    type !== null &&
+    (type === PASSWORD_CHANGE_REQUIRED || type.endsWith(`/${PASSWORD_CHANGE_REQUIRED}`))
+  );
+}
+
+/**
+ * Error bodies of `responseType: 'blob'` requests (CSV export, PDF preview) arrive as a Blob.
+ * Returns the parsed ProblemDetail when the blob holds JSON, the blob itself otherwise.
+ */
+export async function parseBlobBody(data: unknown): Promise<unknown> {
+  if (typeof Blob === 'undefined' || !(data instanceof Blob)) return data;
+  if (!/json/i.test(data.type)) return data;
+  try {
+    return JSON.parse(await data.text()) as unknown;
+  } catch {
+    return data;
+  }
+}
