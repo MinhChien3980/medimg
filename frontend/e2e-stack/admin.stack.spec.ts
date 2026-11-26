@@ -1,8 +1,10 @@
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import { signIn, signInToDashboard, signOut, watchForErrors } from './support';
 
-const NEW_PASSWORD = 'Sunrise-2026-e2e';
+/** Generated per run, so that no password is written in the repository; it meets the policy. */
+const NEW_PASSWORD = `E2e-${randomBytes(9).toString('base64url')}-7`;
 
 test('an admin creates a user, the user changes the temporary password, the admin locks them', async ({
   page,
