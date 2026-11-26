@@ -13,4 +13,8 @@ public interface AiModelRepository extends JpaRepository<AiModel, UUID> {
     List<AiModel> findByStatusOrderByCodeAsc(AiModel.Status status);
 
     Optional<AiModel> findFirstByCodeAndStatusOrderByCreatedAtDesc(String code, AiModel.Status status);
+
+    boolean existsByCodeAndStatus(String code, AiModel.Status status);
+
+    List<AiModel> findAllByOrderByCodeAscVersionAsc();
 }

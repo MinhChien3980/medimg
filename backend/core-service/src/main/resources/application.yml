@@ -126,6 +126,11 @@ app:
       max-deliveries: 5
       reclaim-idle: 30s
       reclaim-interval: 15s
+  # Days of the dashboard (and date-only bounds of audit queries) begin and end at midnight in this time zone.
+  dashboard:
+    zone: ${APP_ZONE:Asia/Ho_Chi_Minh}
+  audit:
+    zone: ${app.dashboard.zone}
   # Job and ingest dispatches are written to the outbox_message table with the state change that causes them and
   # relayed to the Redis streams.
   outbox:

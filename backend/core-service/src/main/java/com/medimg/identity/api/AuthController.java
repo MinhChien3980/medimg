@@ -25,6 +25,11 @@ class AuthController {
     record LoginRequest(@NotBlank @Size(max = 100) String username, @NotBlank @Size(max = 200) String password) {
     }
 
+    /** {@code newPassword} is checked against the password policy by the service, which tells which rules it breaks. */
+    record ChangePasswordRequest(@NotBlank @Size(max = 200) String currentPassword,
+                                 @NotBlank @Size(max = 200) String newPassword) {
+    }
+
     record RefreshRequest(@NotBlank @Size(max = 200) String refreshToken) {
     }
 
@@ -53,5 +58,12 @@ class AuthController {
     @GetMapping("/me")
     UserDto me() {
         return auth.me(CurrentUser.id());
+    }
+
+    /** 204; 422 with type {@code /problems/wrong-current-password} or {@code /problems/password-policy}. */
+    @PostMapping("/me/password")
+    ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest req) {
+        auth.changePassword(CurrentUser.id(), req.currentPassword(), req.newPassword());
+        return ResponseEntity.noContent().build();
     }
 }

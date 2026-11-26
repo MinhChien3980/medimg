@@ -129,7 +129,9 @@ public class PredictionService {
         }
         SeriesRef ref = studies.requireSeries(cmd.studyId(), cmd.seriesId());
         AiModel model = models.findFirstByCodeAndStatusOrderByCreatedAtDesc(cmd.modelCode(), AiModel.Status.ACTIVE)
-                .orElseThrow(() -> ApiException.badRequest("Unknown or inactive model " + cmd.modelCode()));
+                .orElseThrow(() -> models.existsByCodeAndStatus(cmd.modelCode(), AiModel.Status.DISABLED)
+                        ? modelDisabled(cmd.modelCode())
+                        : ApiException.badRequest("Unknown or inactive model " + cmd.modelCode()));
         if (!model.accepts(ref.inputType())) {
             throw ApiException.unprocessable("Model " + model.getCode() + " does not accept " + ref.inputType() + " input");
         }
@@ -186,6 +188,9 @@ public class PredictionService {
     @Audited(action = "PREDICTION_RETRY", resource = "PREDICTION")
     public PredictionDto retry(UUID jobId) {
         PredictionJob job = require(jobId);
+        models.findById(job.getModelId()).filter(m -> m.getStatus() == AiModel.Status.DISABLED).ifPresent(m -> {
+            throw modelDisabled(m.getCode());
+        });
         try {
             job.manualRetry(clock.instant());
         } catch (IllegalStateException e) {
@@ -226,6 +231,11 @@ public class PredictionService {
                 }
             }
         });
+    }
+
+    /** A disabled model takes no new job and no manual retry; jobs already queued or running go on. */
+    private static ApiException modelDisabled(String code) {
+        return ApiException.unprocessable("Model " + code + " is disabled").type("model-disabled");
     }
 
     private CreatedJob created(PredictionJob job) {

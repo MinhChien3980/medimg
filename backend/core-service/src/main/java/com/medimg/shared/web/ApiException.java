@@ -1,11 +1,16 @@
 package com.medimg.shared.web;
 
+import java.net.URI;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.ErrorResponseException;
 
 /** Domain/application error rendered as an RFC 7807 problem detail. */
 public class ApiException extends ErrorResponseException {
+
+    /** Relative base of the problem types this API defines. */
+    public static final String PROBLEM_TYPE_BASE = "/problems/";
 
     private ApiException(HttpStatus status, String title, String detail) {
         super(status, problem(status, title, detail), null);
@@ -40,6 +45,21 @@ public class ApiException extends ErrorResponseException {
 
     public static ApiException unprocessable(String detail) {
         return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "Unprocessable", detail);
+    }
+
+    /**
+     * Sets the problem {@code type} to {@code /problems/<slug>}, so that clients can tell apart errors of the same
+     * status (e.g. which rule a request broke) and show their own wording.
+     */
+    public ApiException type(String slug) {
+        getBody().setType(URI.create(PROBLEM_TYPE_BASE + slug));
+        return this;
+    }
+
+    /** Adds a property (an RFC 7807 extension member) to the problem detail. */
+    public ApiException property(String name, Object value) {
+        getBody().setProperty(name, value);
+        return this;
     }
 
     @Override
