@@ -148,6 +148,36 @@ class PredictionServiceTest {
     }
 
     @Test
+    void aDisabledModelTakesNoNewJobAndAnUnknownOneIsABadRequest() {
+        when(models.existsByCodeAndStatus("off", AiModel.Status.DISABLED)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.create(new CreatePrediction(studyId, seriesId, "off", Map.of(), null)))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
+                    assertThat(e.getMessage()).isEqualTo("Model off is disabled");
+                    assertThat(e.getBody().getType().toString()).isEqualTo("/problems/model-disabled");
+                });
+        assertThatThrownBy(() -> service.create(new CreatePrediction(studyId, seriesId, "nope", Map.of(), null)))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(outbox, never()).dispatch(any(), any());
+    }
+
+    @Test
+    void aJobOfADisabledModelIsNotRetriedByHand() {
+        PredictionJob job = existingJob();
+        job.fail("bad image", false, 3, NOW.minusSeconds(60));
+        AiModel off = mock(AiModel.class);
+        when(off.getStatus()).thenReturn(AiModel.Status.DISABLED);
+        when(off.getCode()).thenReturn("cxr");
+        when(models.findById(job.getModelId())).thenReturn(Optional.of(off));
+
+        assertThatThrownBy(() -> service.retry(job.getId())).hasMessage("Model cxr is disabled");
+        assertThat(job.getStatus()).isEqualTo(JobStatus.FAILED);
+        verify(outbox, never()).dispatch(any(), any());
+    }
+
+    @Test
     void manualRetryDispatchesTheNextAttemptRightAway() {
         PredictionJob job = existingJob();
         job.fail("bad image", false, 3, NOW.minusSeconds(60));

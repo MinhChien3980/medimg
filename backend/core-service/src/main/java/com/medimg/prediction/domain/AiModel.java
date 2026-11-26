@@ -24,7 +24,8 @@ public class AiModel {
 
     public enum Task { CLASSIFICATION_2D, DETECTION_2D, SEGMENTATION_3D }
 
-    public enum Status { STAGING, ACTIVE, RETIRED }
+    /** Only ACTIVE models are offered and take new jobs; an admin disables an ACTIVE model and enables it again. */
+    public enum Status { STAGING, ACTIVE, RETIRED, DISABLED }
 
     @Id
     private UUID id;
@@ -72,6 +73,36 @@ public class AiModel {
 
     private static boolean contains(String commaSeparated, String value) {
         return Arrays.stream(commaSeparated.split(",")).map(String::trim).anyMatch(t -> t.equalsIgnoreCase(value));
+    }
+
+    /**
+     * @return false when the model was disabled already
+     * @throws IllegalStateException unless the model is ACTIVE or DISABLED
+     */
+    public boolean disable() {
+        if (status == Status.DISABLED) {
+            return false;
+        }
+        if (status != Status.ACTIVE) {
+            throw new IllegalStateException("Only an active model can be disabled, model " + code + " is " + status);
+        }
+        status = Status.DISABLED;
+        return true;
+    }
+
+    /**
+     * @return false when the model was active already
+     * @throws IllegalStateException unless the model is ACTIVE or DISABLED
+     */
+    public boolean enable() {
+        if (status == Status.ACTIVE) {
+            return false;
+        }
+        if (status != Status.DISABLED) {
+            throw new IllegalStateException("Only a disabled model can be enabled, model " + code + " is " + status);
+        }
+        status = Status.ACTIVE;
+        return true;
     }
 
     public boolean is3d() {

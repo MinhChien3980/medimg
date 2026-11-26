@@ -1,6 +1,7 @@
 package com.medimg.prediction.domain;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -25,6 +26,30 @@ class AiModelTest {
 
         assertThat(model.supportsModality("MR")).isTrue();
         assertThat(model.supportsModality(null)).isTrue();
+    }
+
+    @Test
+    void anActiveModelIsDisabledAndEnabledAgainIdempotently() {
+        AiModel model = model("IMAGE_2D", null);
+        ReflectionTestUtils.setField(model, "status", AiModel.Status.ACTIVE);
+
+        assertThat(model.disable()).isTrue();
+        assertThat(model.getStatus()).isEqualTo(AiModel.Status.DISABLED);
+        assertThat(model.disable()).isFalse();
+        assertThat(model.enable()).isTrue();
+        assertThat(model.getStatus()).isEqualTo(AiModel.Status.ACTIVE);
+        assertThat(model.enable()).isFalse();
+    }
+
+    @Test
+    void stagingAndRetiredModelsAreNeitherDisabledNorEnabled() {
+        for (AiModel.Status status : new AiModel.Status[] {AiModel.Status.STAGING, AiModel.Status.RETIRED}) {
+            AiModel model = model("IMAGE_2D", null);
+            ReflectionTestUtils.setField(model, "status", status);
+            assertThatThrownBy(model::disable).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(model::enable).isInstanceOf(IllegalStateException.class);
+            assertThat(model.getStatus()).isEqualTo(status);
+        }
     }
 
     private static AiModel model(String inputTypes, String modality) {
